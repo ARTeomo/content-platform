@@ -47,4 +47,6 @@
 
 // Intentionally empty during Phase 1.
 // Table exports begin in Phase 2.
-export {};
+// Phase 2 — foundation tables
+export * from './identity/index.js';
+export * from './publication/index.js';

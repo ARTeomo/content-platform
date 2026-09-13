@@ -10,13 +10,13 @@ contract are frozen. The Drizzle schema implementation is in progress.
 
 ## Documentation
 
-| Document | Purpose |
-|---|---|
-| `TECHNICAL_SPECIFICATION.md` | System architecture and behavior |
-| `LOGICAL_MODEL_SPECIFICATION.md` | DB v1 logical model |
-| `DATABASE_SCHEMA_CONTRACT.md` | Physical PostgreSQL persistence contract |
-| `docs/adr/` | Architecture Decision Records |
-| `docs/conventions/` | Development conventions |
+| Document                         | Purpose                                  |
+| -------------------------------- | ---------------------------------------- |
+| `TECHNICAL_SPECIFICATION.md`     | System architecture and behavior         |
+| `LOGICAL_MODEL_SPECIFICATION.md` | DB v1 logical model                      |
+| `DATABASE_SCHEMA_CONTRACT.md`    | Physical PostgreSQL persistence contract |
+| `docs/adr/`                      | Architecture Decision Records            |
+| `docs/conventions/`              | Development conventions                  |
 
 ## Repository structure
 
@@ -33,3 +33,4 @@ content-platform/
 │   └── conventions/    Development conventions
 ├── scaffold/           Repository bootstrap scripts
 └── .github/            GitHub configuration and templates
+```

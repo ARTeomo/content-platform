@@ -1,0 +1,16 @@
+node_modules/
+.pnpm-store/
+
+dist/
+build/
+out/
+.turbo/
+*.tsbuildinfo
+
+packages/database/migrations/meta/
+pnpm-lock.yaml
+
+coverage/
+
+.cache/
+tmp/

@@ -1,0 +1,16 @@
+# <type>(<scope>): <description>
+# |<----  72 characters max  ---->|
+#
+# [optional body]
+# Explain WHY, not WHAT. The diff shows the what.
+#
+# [optional footer(s)]
+# BREAKING CHANGE: <description>
+#
+# ----------------------------------------------------------------------
+# Types:  feat fix refactor docs test perf build ci chore revert
+# Scope:  database schema migration api worker admin outbox webhook
+#         publication interaction security adr contract docs tooling
+#         scaffold
+# Rule:   One commit = one logical change.
+# ----------------------------------------------------------------------

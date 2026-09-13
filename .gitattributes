@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# Line ending normalization
+# ---------------------------------------------------------------------------
+# The repository stores all text files with LF line endings.
+# Windows checkouts may convert to CRLF for specific file types only.
+#
+# This is critical: without it, Git Bash on Windows commits CRLF, and any
+# Linux consumer (CI, Docker, production) sees corrupted shell scripts.
+
+* text=auto
+
+# Force LF for source, config, and documentation files.
+*.ts     text eol=lf
+*.tsx    text eol=lf
+*.js     text eol=lf
+*.jsx    text eol=lf
+*.mjs    text eol=lf
+*.cjs    text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+*.sql    text eol=lf
+*.toml   text eol=lf
+*.css    text eol=lf
+*.html   text eol=lf
+*.env    text eol=lf
+.env.*   text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+.editorconfig  text eol=lf
+.nvmrc         text eol=lf
+
+# Windows-specific scripts keep CRLF when checked out on Windows.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# ---------------------------------------------------------------------------
+# Binary files — never normalized
+# ---------------------------------------------------------------------------
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.webp   binary
+*.pdf    binary
+*.zip    binary
+*.gz     binary
+*.tar    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.eot    binary
+
+# ---------------------------------------------------------------------------
+# Linguist hints (GitHub language detection)
+# ---------------------------------------------------------------------------
+pnpm-lock.yaml    -diff linguist-generated
+package-lock.json -diff linguist-generated
+yarn.lock         -diff linguist-generated
+
+# Drizzle migration metadata is generated.
+packages/database/migrations/meta/*.json -diff linguist-generated

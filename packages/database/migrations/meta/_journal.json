@@ -15,6 +15,13 @@
       "when": 1789360136778,
       "tag": "0001_clammy_doctor_octopus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789410188948,
+      "tag": "0002_mean_baron_zemo",
+      "breakpoints": true
     }
   ]
 }

@@ -50,3 +50,6 @@
 // Phase 2 — foundation tables
 export * from './identity/index.js';
 export * from './publication/index.js';
+
+// Phase 3 — platform pattern
+export * from './platform/index.js';

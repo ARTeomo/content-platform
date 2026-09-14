@@ -1,4 +1,4 @@
-head -5 packages/database/migrations/0000_*.sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 --> statement-breakpoint
 CREATE TABLE "roles" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

@@ -14,3 +14,10 @@ export {
 } from './client.js';
 
 export * as schema from './schema/index.js';
+export { TransactionManager, type Transaction } from './transaction/index.js';
+export {
+  OutboxRepository,
+  type OutboxJob,
+  type OutboxJobInput,
+  type OutboxJobStatus,
+} from './repositories/index.js';

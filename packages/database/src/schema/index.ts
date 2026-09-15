@@ -30,3 +30,6 @@ export * from './media/index.js';
 
 // Phase 10 — moderation layer
 export * from './moderation/index.js';
+
+// Phase 12 — credential layer
+export * from './credential/index.js';

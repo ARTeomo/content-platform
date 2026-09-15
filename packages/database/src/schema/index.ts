@@ -34,3 +34,7 @@ export * from './moderation/index.js';
 // Phase 12 — credential and interaction response layers
 export * from './credential/index.js';
 export * from './interaction/index.js';
+
+// Phase 13 — configuration and observability layers
+export * from './config/index.js';
+export * from './observability/index.js';

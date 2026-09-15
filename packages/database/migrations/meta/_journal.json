@@ -43,6 +43,13 @@
       "when": 1789491430465,
       "tag": "0005_chunky_mongoose",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789491762231,
+      "tag": "0006_flaky_gauntlet",
+      "breakpoints": true
     }
   ]
 }

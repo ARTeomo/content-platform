@@ -100,3 +100,4 @@ temp/
 # The scaffold scripts are a local bootstrap tool.
 # Remove this entry if the scaffold should be versioned.
 scaffold/
+bootstrap-docs.sh

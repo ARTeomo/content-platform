@@ -17,3 +17,6 @@ export * from './platform/index.js';
 
 // Phase 4 — webhook persistence
 export * from './webhook/index.js';
+
+// Phase 5 — ingestion layer
+export * from './ingestion/index.js';

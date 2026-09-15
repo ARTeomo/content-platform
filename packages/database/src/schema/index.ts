@@ -27,3 +27,6 @@ export * from './content/index.js';
 
 // Phase 9 — media layer
 export * from './media/index.js';
+
+// Phase 10 — moderation layer
+export * from './moderation/index.js';

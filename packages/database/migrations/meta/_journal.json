@@ -57,6 +57,13 @@
       "when": 1789491979919,
       "tag": "0007_worthless_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789492255030,
+      "tag": "0008_easy_catseye",
+      "breakpoints": true
     }
   ]
 }

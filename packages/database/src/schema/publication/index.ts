@@ -1,8 +1,11 @@
 /**
  * Publication schema.
  *
- * Tables related to publication targets and the publication lifecycle.
- * Phase 2 adds only `destinations`; the remaining publication tables
- * arrive in later phases.
+ * Publication targets (destinations), editorial candidates, publication
+ * intent, execution attempts, and reconciliation history.
  */
 export * from './destinations.js';
+export * from './publication-candidates.js';
+export * from './publications.js';
+export * from './publication-attempts.js';
+export * from './publication-reconciliations.js';

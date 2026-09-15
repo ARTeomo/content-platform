@@ -1,0 +1,1 @@
+ALTER TABLE "external_interactions" ADD CONSTRAINT "external_interactions_publication_id_publications_id_fk" FOREIGN KEY ("publication_id") REFERENCES "public"."publications"("id") ON DELETE set null ON UPDATE no action;

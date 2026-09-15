@@ -64,6 +64,13 @@
       "when": 1789492255030,
       "tag": "0008_easy_catseye",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789492600282,
+      "tag": "0009_confused_scourge",
+      "breakpoints": true
     }
   ]
 }

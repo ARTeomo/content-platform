@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createdAtColumn, idColumn, updatedAtColumn } from '../_common.js';
 import { destinations } from '../publication/destinations.js';
+import { publications } from '../publication/publications.js';
 import { webhookEvents } from './webhook-events.js';
 
 /**
@@ -21,8 +22,11 @@ import { webhookEvents } from './webhook-events.js';
  * its own identity and references content lifecycle entities only loosely
  * and optionally via nullable foreign keys.
  *
- * `publication_id` is a plain nullable UUID in Phase 4. The FK to
- * `publications` is added in Phase 5 when that table is created.
+ * `publication_id` links the interaction to the publication that
+ * originated the engagement. The FK uses ON DELETE SET NULL so that the
+ * interaction outlives a publication deletion — the interaction is an
+ * external fact, and preserving it does not require preserving the
+ * publication row.
  *
  * Soft deletion (verb = "remove") is represented in `raw_metadata` and
  * does not physically delete the row.
@@ -39,7 +43,9 @@ export const externalInteractions = pgTable(
     destinationId: uuid('destination_id').references(() => destinations.id, {
       onDelete: 'set null',
     }),
-    publicationId: uuid('publication_id'),
+    publicationId: uuid('publication_id').references(() => publications.id, {
+      onDelete: 'set null',
+    }),
     interactionType: varchar('interaction_type', { length: 32 }).notNull(),
     externalInteractionId: text('external_interaction_id').notNull(),
     parentExternalId: text('parent_external_id'),

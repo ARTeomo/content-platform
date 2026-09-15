@@ -21,6 +21,9 @@ export * from './webhook/index.js';
 // Phase 5-6 — ingestion layer
 export * from './ingestion/index.js';
 
-// Phase 7 — story and content layer
+// Phase 7-8 — story and content layer
 export * from './story/index.js';
 export * from './content/index.js';
+
+// Phase 9 — media layer
+export * from './media/index.js';

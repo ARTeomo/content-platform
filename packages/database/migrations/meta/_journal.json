@@ -29,6 +29,13 @@
       "when": 1789490575029,
       "tag": "0003_lean_captain_cross",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789490992405,
+      "tag": "0004_puzzling_mentallo",
+      "breakpoints": true
     }
   ]
 }

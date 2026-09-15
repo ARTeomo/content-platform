@@ -78,6 +78,13 @@
       "when": 1789492852527,
       "tag": "0010_flashy_patriot",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789493457759,
+      "tag": "0011_natural_orphan",
+      "breakpoints": true
     }
   ]
 }

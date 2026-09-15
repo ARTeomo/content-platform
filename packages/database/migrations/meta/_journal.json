@@ -36,6 +36,13 @@
       "when": 1789490992405,
       "tag": "0004_puzzling_mentallo",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789491430465,
+      "tag": "0005_chunky_mongoose",
+      "breakpoints": true
     }
   ]
 }

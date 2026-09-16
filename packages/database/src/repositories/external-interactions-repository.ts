@@ -48,6 +48,10 @@ export class ExternalInteractionsRepository {
    * one (COALESCE with the existing value).
    */
   async upsertMonotonic(tx: Transaction, draft: ExternalInteractionDraft): Promise<UpsertResult> {
+    // `RETURNING *` would return snake_case column names, which do not
+    // match the Drizzle `$inferSelect` camelCase type. The RETURNING list
+    // below uses quoted aliases so that PostgreSQL returns camelCase keys
+    // and the runtime object matches `ExternalInteractionRow`.
     const rows = (await tx.execute(sql`
       INSERT INTO external_interactions (
         webhook_event_id,
@@ -74,7 +78,7 @@ export class ExternalInteractionsRepository {
         ${draft.actorDisplayName ?? null},
         ${draft.content ?? null},
         ${draft.permalink ?? null},
-        ${draft.occurredAt},
+        ${draft.occurredAt.toISOString()}::timestamptz,
         ${JSON.stringify(draft.rawMetadata ?? {})}::jsonb
       )
       ON CONFLICT (interaction_type, external_interaction_id)
@@ -91,7 +95,22 @@ export class ExternalInteractionsRepository {
         raw_metadata       = EXCLUDED.raw_metadata,
         updated_at         = now()
       WHERE external_interactions.occurred_at <= EXCLUDED.occurred_at
-      RETURNING *
+      RETURNING
+        id,
+        webhook_event_id        AS "webhookEventId",
+        destination_id          AS "destinationId",
+        publication_id          AS "publicationId",
+        interaction_type        AS "interactionType",
+        external_interaction_id AS "externalInteractionId",
+        parent_external_id      AS "parentExternalId",
+        actor_external_id       AS "actorExternalId",
+        actor_display_name      AS "actorDisplayName",
+        content,
+        permalink,
+        occurred_at             AS "occurredAt",
+        raw_metadata            AS "rawMetadata",
+        created_at              AS "createdAt",
+        updated_at              AS "updatedAt"
     `)) as unknown as ExternalInteractionRow[];
 
     const first = rows[0];

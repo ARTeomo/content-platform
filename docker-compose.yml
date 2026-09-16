@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Content Platform — local development services.
+#
+# Usage:
+#   docker compose up -d        start PostgreSQL and Redis
+#   docker compose ps           check container status
+#   docker compose logs -f      tail logs
+#   docker compose down         stop (volumes preserved)
+#   docker compose down -v      stop and delete volumes (destructive)
+# ---------------------------------------------------------------------------
+
+name: content-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: content
+      POSTGRES_PASSWORD: content
+      POSTGRES_DB: content_platform
+      # Keep the timezone stable across the developer's local timezone.
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Initialization scripts run only when the data volume is empty.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U content -d content_platform']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --save
+      - '60'
+      - '1000'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+    name: content-platform-postgres-data
+  redis_data:
+    name: content-platform-redis-data

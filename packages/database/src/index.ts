@@ -32,6 +32,7 @@ export {
   ProviderCredentialsRepository,
   type ProviderCredentialInput,
   type ProviderCredentialLookup,
+  type ProviderCredentialRow,
   type CredentialScope,
   type CredentialStatus,
 } from './repositories/index.js';

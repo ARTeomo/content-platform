@@ -2,7 +2,7 @@ import { and, asc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { providerCredentials } from '../schema/credential/provider-credentials.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
-type ProviderCredentialRow = typeof providerCredentials.$inferSelect;
+export type ProviderCredentialRow = typeof providerCredentials.$inferSelect;
 
 export type CredentialScope = 'APP' | 'DESTINATION';
 export type CredentialStatus = 'VALID' | 'EXPIRING' | 'INVALID' | 'UNKNOWN';

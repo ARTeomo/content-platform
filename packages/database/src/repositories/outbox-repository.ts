@@ -1,5 +1,5 @@
-import { and, eq, lt, sql } from 'drizzle-orm';
-import { outboxJobs, type OutboxJobRow } from '../schema/platform/outbox-jobs.js';
+import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { outboxJobs } from '../schema/platform/outbox-jobs.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
 export type OutboxJobStatus = 'PENDING' | 'DISPATCHING' | 'DISPATCHED' | 'FAILED';
@@ -41,9 +41,6 @@ export class OutboxRepository {
 
   /**
    * Enqueue a job inside a caller-controlled transaction.
-   *
-   * This is the only method that participates in a domain transaction.
-   * The insert becomes visible only when the outer transaction commits.
    */
   async enqueue(tx: Transaction, job: OutboxJobInput): Promise<void> {
     await tx.insert(outboxJobs).values({
@@ -57,12 +54,19 @@ export class OutboxRepository {
   /**
    * Atomically claim up to `limit` PENDING rows and mark them DISPATCHING.
    *
-   * Uses FOR UPDATE SKIP LOCKED to allow concurrent dispatcher instances
-   * without coordination. If a dispatcher crashes after claiming but
-   * before dispatching, `recoverStale` restores the row to PENDING.
+   * ## Two-step pattern
+   *
+   * Step 1 uses a raw SQL CTE with `FOR UPDATE SKIP LOCKED` to claim
+   * rows atomically and returns only the `id` values. Step 2 reads the
+   * full rows via the Drizzle query builder, which returns camelCase
+   * keys matching the `$inferSelect` type.
+   *
+   * This avoids the trap of `RETURNING *` in a raw SQL query, where the
+   * returned column names are snake_case and do not match the TypeScript
+   * `$inferSelect` type.
    */
   async claimPendingBatch(limit: number): Promise<OutboxJob[]> {
-    const rows = (await this.db.execute(sql`
+    const claimed = (await this.db.execute(sql`
       WITH claimed AS (
         SELECT id FROM outbox_jobs
         WHERE status = 'PENDING'
@@ -75,10 +79,32 @@ export class OutboxRepository {
           last_attempt_at = now(),
           attempts = attempts + 1
       WHERE id IN (SELECT id FROM claimed)
-      RETURNING *
-    `)) as unknown as OutboxJobRow[];
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
 
-    return rows.map(mapOutboxJobRow);
+    if (claimed.length === 0) return [];
+
+    const ids = claimed.map((c) => c.id);
+
+    const rows = await this.db
+      .select()
+      .from(outboxJobs)
+      .where(inArray(outboxJobs.id, ids))
+      .orderBy(asc(outboxJobs.createdAt));
+
+    return rows.map((row) => ({
+      id: row.id,
+      queueName: row.queueName,
+      jobId: row.jobId,
+      payload: row.payload as Record<string, unknown>,
+      status: row.status as OutboxJobStatus,
+      attempts: row.attempts,
+      lastAttemptAt: row.lastAttemptAt,
+      lastError: row.lastError,
+      dispatchedAt: row.dispatchedAt,
+      traceId: row.traceId,
+      createdAt: row.createdAt,
+    }));
   }
 
   /**
@@ -98,8 +124,8 @@ export class OutboxRepository {
   /**
    * Record a dispatch failure.
    *
-   * If attempts >= maxAttempts the row becomes FAILED (terminal). Otherwise
-   * it returns to PENDING for the next dispatcher cycle.
+   * If attempts >= maxAttempts the row becomes FAILED (terminal).
+   * Otherwise it returns to PENDING for the next dispatcher cycle.
    */
   async markDispatchFailed(id: string, error: string, maxAttempts: number): Promise<void> {
     await this.db
@@ -113,9 +139,6 @@ export class OutboxRepository {
 
   /**
    * Restore stale DISPATCHING rows to PENDING.
-   *
-   * A row is stale if it has been in DISPATCHING for longer than
-   * `thresholdSeconds`. Returns the number of rows recovered.
    */
   async recoverStale(thresholdSeconds: number): Promise<number> {
     const rows = await this.db
@@ -136,9 +159,7 @@ export class OutboxRepository {
   }
 
   /**
-   * Delete DISPATCHED rows older than `days`. Returns the number of rows deleted.
-   *
-   * PENDING, DISPATCHING, and FAILED rows are never deleted by cleanup.
+   * Delete DISPATCHED rows older than `days`.
    */
   async cleanupOlderThan(days: number): Promise<number> {
     const rows = await this.db
@@ -153,20 +174,4 @@ export class OutboxRepository {
 
     return rows.length;
   }
-}
-
-function mapOutboxJobRow(row: OutboxJobRow): OutboxJob {
-  return {
-    id: row.id,
-    queueName: row.queueName,
-    jobId: row.jobId,
-    payload: row.payload as Record<string, unknown>,
-    status: row.status as OutboxJobStatus,
-    attempts: row.attempts,
-    lastAttemptAt: row.lastAttemptAt,
-    lastError: row.lastError,
-    dispatchedAt: row.dispatchedAt,
-    traceId: row.traceId,
-    createdAt: row.createdAt,
-  };
 }

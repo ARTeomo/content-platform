@@ -175,3 +175,4 @@ Implement `packages/publishers/meta/`:
 3. DATABASE_SCHEMA_CONTRACT.md
 4. Drizzle schema implementation
 5. Generated PostgreSQL migrations
+```

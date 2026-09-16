@@ -7,3 +7,5 @@ export {
   type EncryptedValue,
   type EncryptionContext,
 } from './encryption/index.js';
+
+export * from './meta/index.js';

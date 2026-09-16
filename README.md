@@ -204,10 +204,10 @@ disagree, the higher-level document wins.
 
 **Cloud services** (no local installation required):
 
-| Service          | Purpose            | Provider                    |
-| ---------------- | ------------------ | --------------------------- |
-| PostgreSQL 16    | System of record   | [Neon](https://neon.tech)   |
-| Redis 7 (TLS)    | BullMQ queue       | [Upstash](https://upstash.com) |
+| Service       | Purpose          | Provider                       |
+| ------------- | ---------------- | ------------------------------ |
+| PostgreSQL 16 | System of record | [Neon](https://neon.tech)      |
+| Redis 7 (TLS) | BullMQ queue     | [Upstash](https://upstash.com) |
 
 Docker is not required. Local development runs against these cloud
 services, which matches the production topology and works on machines

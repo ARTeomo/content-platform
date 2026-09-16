@@ -20,6 +20,7 @@
     "db:check": "pnpm --filter @content-platform/database run db:check",
     "db:migrate": "pnpm --filter @content-platform/database run db:migrate",
     "db:studio": "pnpm --filter @content-platform/database run db:studio",
+    "postinstall": "pnpm -r --if-present run build",
     "prepare": "husky || true"
   },
   "devDependencies": {

@@ -6,6 +6,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 [![TypeScript](https://img.shields.io/badge/typescript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen)](#project-status)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -117,12 +118,29 @@ Discovery → Understanding → Deduplication → Story management
 content-platform/
 │
 ├── apps/                       Application processes
-│   ├── api/                    HTTP API and webhook ingress
+│   ├── api/                    HTTP API and webhook ingress (planned)
 │   ├── worker/                 Background workers and OutboxDispatcher
-│   └── admin/                  Administrative UI
+│   │   ├── src/
+│   │   │   ├── config.ts       Environment loading
+│   │   │   ├── index.ts        Worker entrypoint
+│   │   │   ├── outbox-dispatcher.ts
+│   │   │   ├── queue/          BullMQ abstractions (JobQueue, JobConsumer)
+│   │   │   └── webhook/        webhook.process service + change extractors
+│   │   └── package.json
+│   └── admin/                  Administrative UI (planned)
 │
 ├── packages/                   Shared libraries
-│   └── database/               Drizzle schema, migrations, repositories
+│   ├── database/               Drizzle schema, migrations, repositories
+│   │   ├── src/
+│   │   │   ├── schema/         44 tables organized by domain
+│   │   │   ├── repositories/   8 repositories
+│   │   │   ├── transaction/    TransactionManager
+│   │   │   └── client.ts       Database client factory
+│   │   └── migrations/         0000 – 0013
+│   └── authentication/         Credential encryption + Meta lifecycle
+│       └── src/
+│           ├── encryption/     AES-256-GCM credential encryption provider
+│           └── meta/           MetaCredentialService + Graph API client
 │
 ├── docs/                       Documentation
 │   ├── adr/                    Architecture Decision Records
@@ -135,6 +153,8 @@ content-platform/
 ├── .github/                    GitHub configuration and templates
 ├── .vscode/                    Shared VS Code settings
 │
+├── HANDOFF.md                  Session boundary snapshot
+├── docker-compose.yml          (reference) local services definition
 ├── package.json                Root workspace configuration
 ├── pnpm-workspace.yaml         Workspace definition and version overrides
 ├── tsconfig.base.json          Shared TypeScript configuration
@@ -163,6 +183,7 @@ disagree, the higher-level document wins.
 | [`TECHNICAL_SPECIFICATION.md`](./TECHNICAL_SPECIFICATION.md)         | System behavior, state machines, failure modes, observability. |
 | [`LOGICAL_MODEL_SPECIFICATION.md`](./LOGICAL_MODEL_SPECIFICATION.md) | DB v1 logical ingestion, provenance, and clustering model.     |
 | [`DATABASE_SCHEMA_CONTRACT.md`](./DATABASE_SCHEMA_CONTRACT.md)       | Physical PostgreSQL persistence contract (v1.2, 44 tables).    |
+| [`HANDOFF.md`](./HANDOFF.md)                                         | Current state snapshot for session continuity.                 |
 | [`docs/README.md`](./docs/README.md)                                 | Documentation index and reading order.                         |
 | [`docs/adr/`](./docs/adr/)                                           | Architecture Decision Records.                                 |
 | [`docs/architecture/`](./docs/architecture/)                         | System overview, domain model, module map.                     |
@@ -175,12 +196,22 @@ disagree, the higher-level document wins.
 
 ### Prerequisites
 
-| Tool    | Version     | Install                                                                |
-| ------- | ----------- | ---------------------------------------------------------------------- |
-| Node.js | `>= 22.0.0` | <https://nodejs.org> or `nvm use`                                      |
-| pnpm    | `>= 12.0.0` | `corepack enable && corepack prepare pnpm@12.3.4 --activate`           |
-| Git     | `>= 2.40`   | <https://git-scm.com>                                                  |
-| Docker  | `>= 24.0`   | <https://docs.docker.com/get-docker/> (for local PostgreSQL and Redis) |
+| Tool    | Version     | Install                                                      |
+| ------- | ----------- | ------------------------------------------------------------ |
+| Node.js | `>= 22.0.0` | <https://nodejs.org> or `nvm use` (see `.nvmrc`)             |
+| pnpm    | `>= 12.0.0` | `corepack enable && corepack prepare pnpm@12.3.4 --activate` |
+| Git     | `>= 2.40`   | <https://git-scm.com>                                        |
+
+**Cloud services** (no local installation required):
+
+| Service          | Purpose            | Provider                    |
+| ---------------- | ------------------ | --------------------------- |
+| PostgreSQL 16    | System of record   | [Neon](https://neon.tech)   |
+| Redis 7 (TLS)    | BullMQ queue       | [Upstash](https://upstash.com) |
+
+Docker is not required. Local development runs against these cloud
+services, which matches the production topology and works on machines
+that cannot run Docker Desktop.
 
 ### Installation
 
@@ -190,21 +221,22 @@ cd content-platform
 pnpm install
 ```
 
+The `postinstall` script builds every workspace package automatically.
 The `prepare` script wires up Husky hooks. The `commit-msg` hook enforces
 the commit message convention (see
 [`docs/conventions/commits.md`](./docs/conventions/commits.md)).
 
 ### Local development
 
-Local PostgreSQL and Redis run through Docker Compose (see
-[`docs/operations/local-development.md`](./docs/operations/local-development.md)).
+Set up the two cloud services and fill in `.env`. See
+[`docs/operations/local-development.md`](./docs/operations/local-development.md)
+for the full walkthrough.
 
 ```bash
-cp .env.example .env          # fill in local secrets
-docker compose up -d          # start PostgreSQL and Redis
-pnpm db:migrate               # apply migrations to the local database
+cp .env.example .env          # fill in Neon + Upstash credentials
+pnpm db:migrate               # apply migrations to Neon
 pnpm typecheck                # TypeScript project references
-pnpm test                     # run the test suite
+pnpm test                     # run the full test suite
 ```
 
 ### Database commands
@@ -254,43 +286,53 @@ of that document.
 
 ## Project status
 
-**Pre-implementation.** The architecture, logical model, and database
-schema contract are frozen. The Drizzle schema and migration set are
-implemented.
+**Active development.** The architecture, logical model, and database
+schema contract are frozen. The schema, credential layer, outbox
+dispatcher, and webhook processing pipeline are implemented and tested
+against real cloud services.
 
 ### Implemented
 
 - [x] DB v1.2 schema — **44 tables**
-- [x] **14 migrations** (`0000` – `0013`), clean baseline
+- [x] **14 migrations** (`0000` – `0013`), applied to Neon PostgreSQL
 - [x] `pgcrypto` extension registered in the baseline migration
 - [x] Partial index `publications(external_post_id) WHERE ... IS NOT NULL`
+- [x] Partial unique index `provider_credentials_unique` with `COALESCE`
 - [x] Deferred FK `external_interactions.publication_id` → `publications.id`
 - [x] `TransactionManager` (the `run(fn)` API)
-- [x] Six repositories:
+- [x] `createDatabaseClient` factory with health check and graceful shutdown
+- [x] **Eight repositories:**
   - `OutboxRepository`
   - `WebhookSubscriptionsRepository`
   - `WebhookSubscriptionHealthRepository`
   - `WebhookEventsRepository`
   - `WebhookDeliveriesRepository`
   - `ExternalInteractionsRepository`
-- [x] Database client factory with health check and graceful shutdown
+  - `ProviderCredentialsRepository`
+  - `PublicationsRepository`
+- [x] **Credential encryption** (AES-256-GCM with AAD binding and key rotation)
+- [x] **MetaCredentialService** (store / rotate / invalidate / validate / healthCheck)
+- [x] **MetaErrorMapper** (Graph API error categorization)
+- [x] **OutboxDispatcher** (PG → BullMQ bridge with stale recovery and cleanup)
+- [x] **BullMQ abstractions** (`JobQueue`, `BullMqJobQueue`, `BullMqJobConsumer`)
+- [x] **`webhook.process` service** with change extractor registry
+- [x] **Change extractors** for `feed` (COMMENT, REACTION) and `mention`
 - [x] Monorepo toolchain (pnpm workspaces, TS project references, ESLint flat config)
+- [x] **67 passing tests** against real PostgreSQL and Redis
 
 ### In progress
 
-- [ ] Local development environment (Docker Compose for PostgreSQL and Redis)
-- [ ] Integration test execution against a real PostgreSQL instance
+- [ ] Webhook ingress route in `apps/api` (signature verification + outbox enqueue)
 
 ### Next
 
-- [ ] `MetaCredentialService` (encrypted credential lifecycle)
-- [ ] Repository completion (publications, candidates, credentials, config, audit)
-- [ ] `OutboxDispatcher` (PostgreSQL → BullMQ bridge)
-- [ ] Webhook ingress route in `apps/api`
-- [ ] `webhook.process` worker
-- [ ] `webhook.respond` worker
-- [ ] `MetaPublisherAdapter`
-- [ ] Reconciliation schedulers
+- [ ] `webhook.respond` worker and interaction response policy engine
+- [ ] `MetaInteractionAdapter` (outbound Graph API call)
+- [ ] Push-reconciliation via the `feed` webhook
+- [ ] `MetaPublisherAdapter` and publication reconciliation
+- [ ] `MetaRateLimiter` extension for inbound/outbound engagement
+- [ ] Admin UI (`apps/admin`)
+- [ ] Analytics read models (`meta_posts`, `meta_comments`, `meta_reactions`)
 
 See [`docs/architecture/README.md`](./docs/architecture/README.md) for the
 full architecture roadmap.
@@ -303,11 +345,12 @@ full architecture roadmap.
 | ---------------- | ----------------------------------------------------------------- | ----------- |
 | **v1.0 – v1.2**  | Database schema contract evolution                                | ✅ Complete |
 | **Phase 1 – 13** | Drizzle schema implementation (44 tables)                         | ✅ Complete |
-| **Phase 14**     | Local dev environment + integration tests                         | ⏳ Next     |
-| **Phase 15**     | Credential lifecycle (`MetaCredentialService`)                    | ⏳          |
-| **Phase 16**     | Outbox dispatcher + `webhook.process` worker                      | ⏳          |
-| **Phase 17**     | Webhook ingress (`apps/api`)                                      | ⏳          |
-| **Phase 18**     | Interaction response lifecycle (`webhook.respond`)                | ⏳          |
+| **Phase 14**     | Local dev environment (Neon + Upstash)                            | ✅ Complete |
+| **Phase 15**     | Credential lifecycle (`MetaCredentialService`)                    | ✅ Complete |
+| **Phase 16**     | Outbox dispatcher (PG → BullMQ)                                   | ✅ Complete |
+| **Phase 17**     | `webhook.process` service + change extractors                     | ✅ Complete |
+| **Phase 18a**    | Webhook ingress (`apps/api`)                                      | ⏳ Next     |
+| **Phase 18b**    | Interaction response lifecycle (`webhook.respond`)                | ⏳          |
 | **Phase 19**     | Meta publisher adapter and reconciliation                         | ⏳          |
 | **v1.3**         | `webhook_endpoints`, multi-page Meta support                      | 📅 Planned  |
 | **v1.4+**        | Analytics read models, materialized views, AI response generation | 📅 Planned  |

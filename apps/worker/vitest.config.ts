@@ -4,7 +4,10 @@ import { resolve } from 'node:path';
 export default defineConfig({
   resolve: {
     alias: {
-      '@content-platform/database': resolve(__dirname, '../../packages/database/src/index.ts'),
+      '@content-platform/database': resolve(
+        import.meta.dirname,
+        '../../packages/database/src/index.ts',
+      ),
     },
   },
   test: {

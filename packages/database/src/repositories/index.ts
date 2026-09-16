@@ -38,3 +38,5 @@ export {
   type CredentialScope,
   type CredentialStatus,
 } from './provider-credentials-repository.js';
+
+export { PublicationsRepository } from './publications-repository.js';

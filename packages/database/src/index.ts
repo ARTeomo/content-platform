@@ -35,4 +35,5 @@ export {
   type ProviderCredentialRow,
   type CredentialScope,
   type CredentialStatus,
+  PublicationsRepository,
 } from './repositories/index.js';

@@ -29,4 +29,9 @@ export {
   type ExternalInteractionDraft,
   type InteractionType,
   type ExternalInteractionUpsertResult,
+  ProviderCredentialsRepository,
+  type ProviderCredentialInput,
+  type ProviderCredentialLookup,
+  type CredentialScope,
+  type CredentialStatus,
 } from './repositories/index.js';

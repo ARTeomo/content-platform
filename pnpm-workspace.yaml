@@ -2,10 +2,16 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
-allowBuilds:
-  esbuild: true
-
 overrides:
   drizzle-orm: 0.45.2
   drizzle-kit: 0.31.10
   typescript: 7.0.2
+  bullmq: 5.34.0
+  ioredis: 5.4.2
+
+onlyBuiltDependencies:
+  - esbuild
+
+allowBuilds:
+  esbuild: set this to true or false
+  msgpackr-extract: set this to true or false

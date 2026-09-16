@@ -1,4 +1,7 @@
 {
   "files": [],
-  "references": [{ "path": "./packages/database" }]
+  "references": [
+    { "path": "./packages/database" },
+    { "path": "./packages/authentication" }
+  ]
 }

@@ -1,7 +1,4 @@
-export {
-  AuthenticationError,
-  type AuthenticationErrorCategory,
-} from './errors.js';
+export { AuthenticationError, type AuthenticationErrorCategory } from './errors.js';
 
 export { loadMetaCredentialKeySet, type EncryptionKeySet } from './env.js';
 

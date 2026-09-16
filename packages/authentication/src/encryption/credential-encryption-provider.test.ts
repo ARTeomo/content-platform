@@ -55,9 +55,7 @@ describe('CredentialEncryptionProvider', () => {
       destinationId: '00000000-0000-0000-0000-000000000002',
     };
 
-    expect(() => provider.decrypt(encrypted, wrongDestination)).toThrowError(
-      AuthenticationError,
-    );
+    expect(() => provider.decrypt(encrypted, wrongDestination)).toThrowError(AuthenticationError);
   });
 
   it('fails to decrypt when the credential type in the AAD does not match', () => {

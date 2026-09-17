@@ -82,9 +82,7 @@ export async function metaWebhookRoutes(
 
     const envelope = parsed.data;
     const rawBodyHash = createHash('sha256').update(rawBody).digest('hex');
-    const idempotencyKey = createHash('sha256')
-      .update(`META:${rawBodyHash}`)
-      .digest('hex');
+    const idempotencyKey = createHash('sha256').update(`META:${rawBodyHash}`).digest('hex');
 
     const externalObjectId = envelope.entry[0]?.id ?? 'unknown';
     const field = envelope.entry[0]?.changes[0]?.field;

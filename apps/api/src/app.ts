@@ -17,18 +17,14 @@ export interface BuildAppOptions {
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
-  app.addContentTypeParser(
-    'application/json',
-    { parseAs: 'buffer' },
-    (request, body, done) => {
-      request.rawBody = body as Buffer;
-      try {
-        done(null, JSON.parse((body as Buffer).toString('utf8')));
-      } catch (err) {
-        done(err as Error, undefined);
-      }
-    },
-  );
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
+    request.rawBody = body as Buffer;
+    try {
+      done(null, JSON.parse((body as Buffer).toString('utf8')));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
 
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/ready', async (_req, reply) => {

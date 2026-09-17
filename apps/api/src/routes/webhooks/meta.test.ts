@@ -1,9 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  createDatabaseClient,
-  type DatabaseClient,
-} from '@content-platform/database';
+import { createDatabaseClient, type DatabaseClient } from '@content-platform/database';
 import { buildApp } from '../../app.js';
 import type { ApiConfig } from '../../config.js';
 

@@ -633,20 +633,12 @@ type DiscoveryMethod =
   | 'API_POLL'
   | 'DIRECT_SEED';
 
-type AcquisitionMethod =
-  | 'HTTP_FETCH'
-  | 'HEADLESS_BROWSER'
-  | 'BYPASSED_INLINE';
+type AcquisitionMethod = 'HTTP_FETCH' | 'HEADLESS_BROWSER' | 'BYPASSED_INLINE';
 
 type ExtractionMethod =
-  | 'RSS_INLINE_EXTRACTOR'
-  | 'GENERIC_ARTICLE_EXTRACTOR'
-  | 'CUSTOM_DOM_EXTRACTOR';
+  'RSS_INLINE_EXTRACTOR' | 'GENERIC_ARTICLE_EXTRACTOR' | 'CUSTOM_DOM_EXTRACTOR';
 
-type OperationMethod =
-  | DiscoveryMethod
-  | AcquisitionMethod
-  | ExtractionMethod;
+type OperationMethod = DiscoveryMethod | AcquisitionMethod | ExtractionMethod;
 
 interface Provenance {
   sourceId: string;
@@ -1139,9 +1131,7 @@ Interface:
 
 ```typescript
 interface ContentValidationService {
-  validate(
-    content: PublicationCandidate
-  ): Promise<ValidationResult>;
+  validate(content: PublicationCandidate): Promise<ValidationResult>;
 }
 ```
 
@@ -1151,7 +1141,7 @@ interface ContentValidationService {
 
 ```typescript
 interface ValidationResult {
-  status: "PASS" | "FAIL" | "REVIEW";
+  status: 'PASS' | 'FAIL' | 'REVIEW';
   errors: ValidationError[];
   warnings: ValidationWarning[];
 }
@@ -1427,14 +1417,9 @@ AI processing must have explicit cost controls.
 
 ```typescript
 interface AIQuotaService {
-  canExecute(
-    operation: AIOperation,
-    estimatedCost: number
-  ): Promise<boolean>;
+  canExecute(operation: AIOperation, estimatedCost: number): Promise<boolean>;
 
-  recordUsage(
-    usage: AIUsage
-  ): Promise<void>;
+  recordUsage(usage: AIUsage): Promise<void>;
 }
 ```
 
@@ -2119,9 +2104,7 @@ Interface:
 
 ```typescript
 interface ImagePolicyEngine {
-  evaluate(
-    image: ImageCandidate
-  ): Promise<ImagePolicyResult>;
+  evaluate(image: ImageCandidate): Promise<ImagePolicyResult>;
 }
 ```
 
@@ -4630,15 +4613,15 @@ The handshake does **not** create a `webhook_events` row.
 
 ## 140.7 Response codes
 
-| Condition | HTTP | Body |
-|---|---|---|
-| Successful processing | `200` | `{"status":"ok"}` |
-| Duplicate event | `200` | `{"status":"ok"}` |
-| Invalid signature | `401` | `{"error":"invalid_signature"}` |
-| Malformed envelope | `400` | `{"error":"malformed_payload"}` |
-| Database error | `500` | `{"error":"internal"}` |
-| Redis error | `500` | `{"error":"internal"}` |
-| Own rate limit exceeded | `429` | `{"error":"rate_limited"}` |
+| Condition               | HTTP  | Body                            |
+| ----------------------- | ----- | ------------------------------- |
+| Successful processing   | `200` | `{"status":"ok"}`               |
+| Duplicate event         | `200` | `{"status":"ok"}`               |
+| Invalid signature       | `401` | `{"error":"invalid_signature"}` |
+| Malformed envelope      | `400` | `{"error":"malformed_payload"}` |
+| Database error          | `500` | `{"error":"internal"}`          |
+| Redis error             | `500` | `{"error":"internal"}`          |
+| Own rate limit exceeded | `429` | `{"error":"rate_limited"}`      |
 
 A `500` response causes Meta to retry with exponential backoff. The retry hits the idempotency-key path and produces HTTP 200 without duplicate side effects.
 
@@ -4701,10 +4684,10 @@ Each change is materialized in its own transaction. The event-status update is a
 
 Extractors are registered by `field`:
 
-| `field` | Extractor | Materializes |
-|---|---|---|
-| `feed` | `FeedChangeExtractor` | `COMMENT`, `REACTION`, or skip |
-| `mention` | `MentionChangeExtractor` | `MENTION` |
+| `field`   | Extractor                | Materializes                   |
+| --------- | ------------------------ | ------------------------------ |
+| `feed`    | `FeedChangeExtractor`    | `COMMENT`, `REACTION`, or skip |
+| `mention` | `MentionChangeExtractor` | `MENTION`                      |
 
 Unrecognized `field` values are recorded with `error_category = 'UNSUPPORTED_FIELD'` and treated as **successful skips**, not failures.
 
@@ -4773,10 +4756,7 @@ The policy engine decides whether an inbound interaction generates an outbound r
 
 ```typescript
 interface InteractionResponsePolicyEngine {
-  decide(
-    interaction: ExternalInteraction,
-    context: PolicyContext
-  ): Promise<ResponseDecision>;
+  decide(interaction: ExternalInteraction, context: PolicyContext): Promise<ResponseDecision>;
 }
 
 type ResponseDecision =
@@ -4960,13 +4940,13 @@ UNKNOWN
 
 Transitions:
 
-| From | To | Trigger | Who |
-|---|---|---|---|
-| `UNKNOWN` | `VALID` | First successful validation | Admin / service |
-| `VALID` | `EXPIRING` | `expires_at < now + 7d` | Scheduler |
-| `EXPIRING` | `VALID` | Successful refresh | `meta.credential.refresh` |
-| `EXPIRING` | `INVALID` | Refresh failure or Graph API 401/403 | Service / adapter |
-| `VALID` | `INVALID` | Graph API 401/403 | Adapter |
+| From       | To         | Trigger                              | Who                       |
+| ---------- | ---------- | ------------------------------------ | ------------------------- |
+| `UNKNOWN`  | `VALID`    | First successful validation          | Admin / service           |
+| `VALID`    | `EXPIRING` | `expires_at < now + 7d`              | Scheduler                 |
+| `EXPIRING` | `VALID`    | Successful refresh                   | `meta.credential.refresh` |
+| `EXPIRING` | `INVALID`  | Refresh failure or Graph API 401/403 | Service / adapter         |
+| `VALID`    | `INVALID`  | Graph API 401/403                    | Adapter                   |
 
 `INVALID` is sticky. It is cleared only by a successful `validateCredential` or `rotateCredential` call. The webhook processing pipeline may generate notifications about token invalidation, but it does not modify the credential status.
 

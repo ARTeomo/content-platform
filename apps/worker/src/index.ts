@@ -1,15 +1,24 @@
-import { createDatabaseClient, OutboxRepository } from '@content-platform/database';
+import {
+  createDatabaseClient,
+  ExternalInteractionsRepository,
+  OutboxRepository,
+  PublicationsRepository,
+  TransactionManager,
+  WebhookDeliveriesRepository,
+  WebhookEventsRepository,
+} from '@content-platform/database';
 import { loadWorkerConfig } from './config.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
-import { BullMqJobQueue } from './queue/index.js';
+import { BullMqJobConsumer, BullMqJobQueue } from './queue/index.js';
+import {
+  ChangeExtractorRegistry,
+  FeedChangeExtractor,
+  MentionChangeExtractor,
+  WebhookProcessService,
+  WebhookProcessWorker,
+  type WebhookProcessJobData,
+} from './webhook/index.js';
 
-/**
- * Worker entrypoint.
- *
- * Phase 16: runs the OutboxDispatcher only. Subsequent phases will add
- * the BullMQ workers for `webhook.process`, `webhook.respond`, and
- * other queues.
- */
 async function main(): Promise<void> {
   const config = loadWorkerConfig();
 
@@ -17,17 +26,34 @@ async function main(): Promise<void> {
     url: config.databaseUrl,
     applicationName: 'content-platform-worker',
   });
+  const txManager = new TransactionManager(db.db);
 
-  const queue = new BullMqJobQueue({
-    redisUrl: config.redisUrl,
-    queueName: config.queuePrefix,
-  });
+  const queue = new BullMqJobQueue({ redisUrl: config.redisUrl });
 
   const outboxRepo = new OutboxRepository(db.db);
-  const dispatcher = new OutboxDispatcher({
-    outboxRepo,
-    queue,
-    config,
+  const dispatcher = new OutboxDispatcher({ outboxRepo, queue, config });
+
+  const extractorRegistry = new ChangeExtractorRegistry()
+    .register(new FeedChangeExtractor())
+    .register(new MentionChangeExtractor());
+
+  const webhookProcessService = new WebhookProcessService({
+    txManager,
+    eventsRepo: new WebhookEventsRepository(db.db),
+    deliveriesRepo: new WebhookDeliveriesRepository(db.db),
+    interactionsRepo: new ExternalInteractionsRepository(db.db),
+    publicationsRepo: new PublicationsRepository(db.db),
+    extractorRegistry,
+  });
+
+  const webhookProcessWorker = new WebhookProcessWorker({
+    consumerFactory: (options) =>
+      new BullMqJobConsumer<WebhookProcessJobData>({
+        redisUrl: config.redisUrl,
+        queueName: options.queueName,
+        processor: options.processor,
+      }),
+    service: webhookProcessService,
   });
 
   let shuttingDown = false;
@@ -35,6 +61,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[worker] received ${signal}, shutting down`);
+    await webhookProcessWorker.close();
     await dispatcher.stop();
     await queue.close();
     await db.close();
@@ -44,6 +71,7 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
+  console.info('[worker] started');
   await dispatcher.start();
 }
 

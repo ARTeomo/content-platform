@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createDatabaseClient,
   OutboxRepository,
@@ -7,7 +7,7 @@ import {
 } from '@content-platform/database';
 import { Redis } from 'ioredis';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
-import { BullMqJobQueue } from './queue/index.js';
+import { BullMqJobQueue, redisOptionsFromUrl } from './queue/index.js';
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL;
 const TEST_REDIS_URL = process.env.TEST_REDIS_URL;
@@ -27,33 +27,30 @@ describe.skipIf(!TEST_DB_URL || !TEST_REDIS_URL)('OutboxDispatcher', () => {
 
     queue = new BullMqJobQueue({
       redisUrl: TEST_REDIS_URL!,
-      queueName,
     });
 
-    redis = new Redis(TEST_REDIS_URL!, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false,
+    redis = new Redis({
+      ...redisOptionsFromUrl(TEST_REDIS_URL!),
+      maxRetriesPerRequest: 3,
+      enableOfflineQueue: false,
+    });
+    redis.on('error', () => {
+      // Suppress noise; assertions will fail if the connection is bad.
     });
   });
 
   afterAll(async () => {
-    await queue.close();
-    await redis.quit();
+    await queue.close().catch(() => undefined);
+    await redis.quit().catch(() => undefined);
     await client.close();
   });
 
   beforeEach(async () => {
     await client.sql`TRUNCATE outbox_jobs RESTART IDENTITY CASCADE`;
-    // Flush only our BullMQ keys.
     const keys = await redis.keys(`bull:${queueName}:*`);
     if (keys.length > 0) {
       await redis.del(...keys);
     }
-  });
-
-  afterEach(async () => {
-    // Ensure timers do not leak between tests.
-    await new Promise((resolve) => setTimeout(resolve, 50));
   });
 
   it('dispatches a PENDING job to the queue and marks it DISPATCHED', async () => {
@@ -96,7 +93,6 @@ describe.skipIf(!TEST_DB_URL || !TEST_REDIS_URL)('OutboxDispatcher', () => {
       });
     });
 
-    // Manually force the row into DISPATCHING with an old timestamp.
     await client.sql`
       UPDATE outbox_jobs
       SET status = 'DISPATCHING',

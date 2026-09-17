@@ -9,9 +9,6 @@ overrides:
   bullmq: 5.34.0
   ioredis: 5.4.2
 
-onlyBuiltDependencies:
-  - esbuild
-
 allowBuilds:
-  esbuild: set this to true or false
-  msgpackr-extract: set this to true or false
+  esbuild: true
+  msgpackr-extract: true

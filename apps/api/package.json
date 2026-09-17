@@ -1,0 +1,26 @@
+{
+  "name": "@content-platform/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "dev": "node --watch dist/index.js",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@content-platform/database": "workspace:*",
+    "fastify": "5.2.0",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}

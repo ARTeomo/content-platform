@@ -282,12 +282,12 @@ Purpose: authenticated application roles.
 
 `roles` is a supporting platform persistence table. It is intentionally outside the DB v1 Logical Model Specification because authentication and authorization schema are explicit non-goals of that document.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `name` | text | no | — | UNIQUE |
-| `description` | text | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column        | Type        | Null | Default   | Constraint |
+| ------------- | ----------- | ---: | --------- | ---------- |
+| `id`          | uuid        |   no | generated | PK         |
+| `name`        | text        |   no | —         | UNIQUE     |
+| `description` | text        |  yes | —         | —          |
+| `created_at`  | timestamptz |   no | now       | —          |
 
 Canonical role names:
 
@@ -304,16 +304,16 @@ ADMIN
 
 Purpose: authenticated application users.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `email` | text | no | — | UNIQUE |
-| `password_hash` | text | no | — | — |
-| `display_name` | text | no | — | — |
-| `role_id` | uuid | no | — | FK → `roles.id` |
-| `is_active` | boolean | no | true | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column          | Type        | Null | Default   | Constraint      |
+| --------------- | ----------- | ---: | --------- | --------------- |
+| `id`            | uuid        |   no | generated | PK              |
+| `email`         | text        |   no | —         | UNIQUE          |
+| `password_hash` | text        |   no | —         | —               |
+| `display_name`  | text        |   no | —         | —               |
+| `role_id`       | uuid        |   no | —         | FK → `roles.id` |
+| `is_active`     | boolean     |   no | true      | —               |
+| `created_at`    | timestamptz |   no | now       | —               |
+| `updated_at`    | timestamptz |   no | now       | —               |
 
 Plaintext passwords are prohibited.
 
@@ -325,16 +325,16 @@ Purpose: logical publisher, brand, or other content source.
 
 A Source is **not** a technical endpoint. Endpoint-specific access information belongs to `source_endpoints`.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `name` | text | no | — | UNIQUE |
-| `status` | varchar(32) | no | — | `ACTIVE`, `PAUSED`, `DISABLED` |
-| `reputation_state` | varchar(32) | no | — | `VERIFIED`, `NEUTRAL`, `FLAGGED` |
-| `priority` | integer | no | 100 | — |
-| `safety_limits` | jsonb | no | `{}` | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column             | Type        | Null | Default   | Constraint                       |
+| ------------------ | ----------- | ---: | --------- | -------------------------------- |
+| `id`               | uuid        |   no | generated | PK                               |
+| `name`             | text        |   no | —         | UNIQUE                           |
+| `status`           | varchar(32) |   no | —         | `ACTIVE`, `PAUSED`, `DISABLED`   |
+| `reputation_state` | varchar(32) |   no | —         | `VERIFIED`, `NEUTRAL`, `FLAGGED` |
+| `priority`         | integer     |   no | 100       | —                                |
+| `safety_limits`    | jsonb       |   no | `{}`      | —                                |
+| `created_at`       | timestamptz |   no | now       | —                                |
+| `updated_at`       | timestamptz |   no | now       | —                                |
 
 `type` and `url` are intentionally absent. They are endpoint properties and therefore belong to `source_endpoints`.
 
@@ -353,19 +353,19 @@ Purpose: concrete technical access point belonging to a Source.
 
 One Source may expose multiple endpoints for different discovery, acquisition, and extraction strategies.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `source_id` | uuid | no | — | FK → `sources.id` |
-| `representation` | varchar(32) | no | — | `XML`, `HTML`, `JSON`, `UNKNOWN` |
-| `capabilities` | text[] | no | — | domain-validated capability values |
-| `url` | text | no | — | — |
-| `status` | varchar(32) | no | — | `ACTIVE`, `PAUSED`, `DISABLED` |
-| `next_poll_at` | timestamptz | no | now | — |
-| `state_version` | integer | no | 0 | `>= 0` |
-| `state` | jsonb | no | `{"kind":"STATELESS"}` | discriminated endpoint state |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column           | Type        | Null | Default                | Constraint                         |
+| ---------------- | ----------- | ---: | ---------------------- | ---------------------------------- |
+| `id`             | uuid        |   no | generated              | PK                                 |
+| `source_id`      | uuid        |   no | —                      | FK → `sources.id`                  |
+| `representation` | varchar(32) |   no | —                      | `XML`, `HTML`, `JSON`, `UNKNOWN`   |
+| `capabilities`   | text[]      |   no | —                      | domain-validated capability values |
+| `url`            | text        |   no | —                      | —                                  |
+| `status`         | varchar(32) |   no | —                      | `ACTIVE`, `PAUSED`, `DISABLED`     |
+| `next_poll_at`   | timestamptz |   no | now                    | —                                  |
+| `state_version`  | integer     |   no | 0                      | `>= 0`                             |
+| `state`          | jsonb       |   no | `{"kind":"STATELESS"}` | discriminated endpoint state       |
+| `created_at`     | timestamptz |   no | now                    | —                                  |
+| `updated_at`     | timestamptz |   no | now                    | —                                  |
 
 Unique constraint:
 
@@ -449,16 +449,16 @@ Purpose: operational health extension for a SourceEndpoint.
 
 The table is a strict 1:1 extension of `source_endpoints`.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `endpoint_id` | uuid | no | — | PK, FK → `source_endpoints.id` ON DELETE CASCADE |
-| `consecutive_failures` | integer | no | 0 | `>= 0` |
-| `last_success_at` | timestamptz | yes | — | — |
-| `last_failure_at` | timestamptz | yes | — | — |
-| `last_error_category` | varchar(64) | yes | — | — |
-| `last_error_message` | text | yes | — | — |
-| `items_today` | integer | no | 0 | `>= 0` |
-| `updated_at` | timestamptz | no | now | — |
+| Column                 | Type        | Null | Default | Constraint                                       |
+| ---------------------- | ----------- | ---: | ------- | ------------------------------------------------ |
+| `endpoint_id`          | uuid        |   no | —       | PK, FK → `source_endpoints.id` ON DELETE CASCADE |
+| `consecutive_failures` | integer     |   no | 0       | `>= 0`                                           |
+| `last_success_at`      | timestamptz |  yes | —       | —                                                |
+| `last_failure_at`      | timestamptz |  yes | —       | —                                                |
+| `last_error_category`  | varchar(64) |  yes | —       | —                                                |
+| `last_error_message`   | text        |  yes | —       | —                                                |
+| `items_today`          | integer     |   no | 0       | `>= 0`                                           |
+| `updated_at`           | timestamptz |   no | now     | —                                                |
 
 `items_today` provides database-backed endpoint operational counter state. The application/transaction layer defines the reset and limit-enforcement semantics.
 
@@ -474,15 +474,15 @@ Purpose: canonical candidate identity created by discovery.
 
 A DiscoveredResource represents a candidate resource independently of the observation path that found it.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `canonical_url` | text | no | — | UNIQUE |
-| `external_id` | text | yes | — | — |
-| `published_at` | timestamptz | yes | — | — |
-| `metadata` | jsonb | no | `{}` | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column          | Type        | Null | Default   | Constraint |
+| --------------- | ----------- | ---: | --------- | ---------- |
+| `id`            | uuid        |   no | generated | PK         |
+| `canonical_url` | text        |   no | —         | UNIQUE     |
+| `external_id`   | text        |  yes | —         | —          |
+| `published_at`  | timestamptz |  yes | —         | —          |
+| `metadata`      | jsonb       |   no | `{}`      | —          |
+| `created_at`    | timestamptz |   no | now       | —          |
+| `updated_at`    | timestamptz |   no | now       | —          |
 
 `canonical_url` is the normalized candidate identity and is unique at this layer.
 
@@ -494,15 +494,15 @@ Multiple endpoints discovering the same normalized URL reference the same `disco
 
 Purpose: immutable record of an individual discovery of a DiscoveredResource through a SourceEndpoint.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `discovered_resource_id` | uuid | no | — | FK → `discovered_resources.id` ON DELETE CASCADE |
-| `endpoint_id` | uuid | no | — | FK → `source_endpoints.id` ON DELETE CASCADE |
-| `external_id` | text | yes | — | — |
-| `published_at` | timestamptz | yes | — | — |
-| `metadata` | jsonb | no | `{}` | — |
-| `observed_at` | timestamptz | no | now | — |
+| Column                   | Type        | Null | Default   | Constraint                                       |
+| ------------------------ | ----------- | ---: | --------- | ------------------------------------------------ |
+| `id`                     | uuid        |   no | generated | PK                                               |
+| `discovered_resource_id` | uuid        |   no | —         | FK → `discovered_resources.id` ON DELETE CASCADE |
+| `endpoint_id`            | uuid        |   no | —         | FK → `source_endpoints.id` ON DELETE CASCADE     |
+| `external_id`            | text        |  yes | —         | —                                                |
+| `published_at`           | timestamptz |  yes | —         | —                                                |
+| `metadata`               | jsonb       |   no | `{}`      | —                                                |
+| `observed_at`            | timestamptz |   no | now       | —                                                |
 
 The Source is derived through:
 
@@ -522,16 +522,16 @@ Observations are immutable detection records. There is no `updated_at`.
 
 Purpose: immutable cross-cutting lineage log.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `target_entity_type` | varchar(64) | no | — | domain-validated |
-| `target_entity_id` | uuid | no | — | polymorphic target identifier |
-| `endpoint_id` | uuid | yes | — | FK → `source_endpoints.id`, `ON DELETE SET NULL` |
-| `phase` | varchar(32) | no | — | `DISCOVERY`, `ACQUISITION`, `EXTRACTION` |
-| `method` | varchar(64) | no | — | phase-compatible operation method |
-| `artifact_hash` | varchar(128) | yes | — | optional integrity value |
-| `observed_at` | timestamptz | no | now | — |
+| Column               | Type         | Null | Default   | Constraint                                       |
+| -------------------- | ------------ | ---: | --------- | ------------------------------------------------ |
+| `id`                 | uuid         |   no | generated | PK                                               |
+| `target_entity_type` | varchar(64)  |   no | —         | domain-validated                                 |
+| `target_entity_id`   | uuid         |   no | —         | polymorphic target identifier                    |
+| `endpoint_id`        | uuid         |  yes | —         | FK → `source_endpoints.id`, `ON DELETE SET NULL` |
+| `phase`              | varchar(32)  |   no | —         | `DISCOVERY`, `ACQUISITION`, `EXTRACTION`         |
+| `method`             | varchar(64)  |   no | —         | phase-compatible operation method                |
+| `artifact_hash`      | varchar(128) |  yes | —         | optional integrity value                         |
+| `observed_at`        | timestamptz  |   no | now       | —                                                |
 
 Target entity types:
 
@@ -561,14 +561,14 @@ Provenance events are immutable. There is no `updated_at`.
 
 Purpose: raw acquisition artifact retained for diagnostics, retries, auditability, and re-extraction.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `discovered_resource_id` | uuid | no | — | FK → `discovered_resources.id` ON DELETE CASCADE |
-| `url` | text | no | — | — |
-| `content_type` | varchar(128) | no | — | — |
-| `body` | text | no | — | raw payload representation |
-| `fetched_at` | timestamptz | no | now | — |
+| Column                   | Type         | Null | Default   | Constraint                                       |
+| ------------------------ | ------------ | ---: | --------- | ------------------------------------------------ |
+| `id`                     | uuid         |   no | generated | PK                                               |
+| `discovered_resource_id` | uuid         |   no | —         | FK → `discovered_resources.id` ON DELETE CASCADE |
+| `url`                    | text         |   no | —         | —                                                |
+| `content_type`           | varchar(128) |   no | —         | —                                                |
+| `body`                   | text         |   no | —         | raw payload representation                       |
+| `fetched_at`             | timestamptz  |   no | now       | —                                                |
 
 One DiscoveredResource may have multiple RawResource snapshots.
 
@@ -584,21 +584,21 @@ There is no `updated_at`.
 
 Purpose: structured extraction result before platform-level normalization.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `source_id` | uuid | no | — | FK → `sources.id` ON DELETE CASCADE |
-| `source_item_id` | text | no | — | UNIQUE with `source_id` |
-| `source_url` | text | no | — | — |
-| `title` | text | no | — | — |
-| `description` | text | yes | — | — |
-| `content` | text | no | — | — |
-| `author` | text | yes | — | — |
-| `language` | text | yes | — | — |
-| `published_at` | timestamptz | yes | — | — |
-| `discovered_at` | timestamptz | no | now | — |
-| `raw_resource_id` | uuid | yes | — | FK → `raw_resources.id` ON DELETE SET NULL |
-| `content_item_id` | uuid | yes | — | FK → `content_items.id` ON DELETE SET NULL |
+| Column            | Type        | Null | Default   | Constraint                                 |
+| ----------------- | ----------- | ---: | --------- | ------------------------------------------ |
+| `id`              | uuid        |   no | generated | PK                                         |
+| `source_id`       | uuid        |   no | —         | FK → `sources.id` ON DELETE CASCADE        |
+| `source_item_id`  | text        |   no | —         | UNIQUE with `source_id`                    |
+| `source_url`      | text        |   no | —         | —                                          |
+| `title`           | text        |   no | —         | —                                          |
+| `description`     | text        |  yes | —         | —                                          |
+| `content`         | text        |   no | —         | —                                          |
+| `author`          | text        |  yes | —         | —                                          |
+| `language`        | text        |  yes | —         | —                                          |
+| `published_at`    | timestamptz |  yes | —         | —                                          |
+| `discovered_at`   | timestamptz |   no | now       | —                                          |
+| `raw_resource_id` | uuid        |  yes | —         | FK → `raw_resources.id` ON DELETE SET NULL |
+| `content_item_id` | uuid        |  yes | —         | FK → `content_items.id` ON DELETE SET NULL |
 
 Unique constraint:
 
@@ -620,15 +620,15 @@ Purpose: platform-level canonical content identity.
 
 A ContentItem is independent of any single SourceItem, source endpoint, or discovery URL.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `canonical_url` | text | no | — | UNIQUE |
-| `status` | varchar(32) | no | — | `DRAFT`, `PUBLISHED`, `ARCHIVED`, `TRASHED` |
-| `published_at` | timestamptz | yes | — | — |
-| `current_version_id` | uuid | yes | — | FK → `content_versions.id` ON DELETE SET NULL |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column               | Type        | Null | Default   | Constraint                                    |
+| -------------------- | ----------- | ---: | --------- | --------------------------------------------- |
+| `id`                 | uuid        |   no | generated | PK                                            |
+| `canonical_url`      | text        |   no | —         | UNIQUE                                        |
+| `status`             | varchar(32) |   no | —         | `DRAFT`, `PUBLISHED`, `ARCHIVED`, `TRASHED`   |
+| `published_at`       | timestamptz |  yes | —         | —                                             |
+| `current_version_id` | uuid        |  yes | —         | FK → `content_versions.id` ON DELETE SET NULL |
+| `created_at`         | timestamptz |   no | now       | —                                             |
+| `updated_at`         | timestamptz |   no | now       | —                                             |
 
 The canonical URL belongs to the canonical content identity layer.
 
@@ -646,12 +646,12 @@ Because `content_items.current_version_id` and `content_versions.content_item_id
 
 Purpose: map alternate URLs to a canonical ContentItem.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_item_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `url` | text | no | — | UNIQUE across platform |
-| `url_kind` | varchar(32) | no | — | `ALIAS`, `AMP`, `TRACKING_VARIANT` |
+| Column            | Type        | Null | Default   | Constraint                                |
+| ----------------- | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`              | uuid        |   no | generated | PK                                        |
+| `content_item_id` | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `url`             | text        |   no | —         | UNIQUE across platform                    |
+| `url_kind`        | varchar(32) |   no | —         | `ALIAS`, `AMP`, `TRACKING_VARIANT`        |
 
 The canonical URL itself is owned by `content_items.canonical_url` and is not duplicated as a `CANONICAL` row in `content_urls`.
 
@@ -663,15 +663,15 @@ The global uniqueness of `url` prevents one alternate URL from being assigned to
 
 Purpose: immutable normalized representation of a ContentItem at a particular processing revision.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_item_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `version_number` | integer | no | — | `> 0`, UNIQUE with content item |
-| `title` | text | no | — | — |
-| `content` | text | no | — | — |
-| `processing_version` | varchar(64) | no | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column               | Type        | Null | Default   | Constraint                                |
+| -------------------- | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`                 | uuid        |   no | generated | PK                                        |
+| `content_item_id`    | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `version_number`     | integer     |   no | —         | `> 0`, UNIQUE with content item           |
+| `title`              | text        |   no | —         | —                                         |
+| `content`            | text        |   no | —         | —                                         |
+| `processing_version` | varchar(64) |   no | —         | —                                         |
+| `created_at`         | timestamptz |   no | now       | —                                         |
 
 Unique constraint:
 
@@ -689,15 +689,15 @@ Versions are immutable after creation. There is no `updated_at`.
 
 Purpose: extracted named or typed entities associated with canonical content.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `entity_type` | text | no | — | — |
-| `entity_value` | text | no | — | — |
-| `normalized_value` | text | yes | — | — |
-| `confidence` | numeric(5,4) | yes | — | `0..1` |
-| `created_at` | timestamptz | no | now | — |
+| Column             | Type         | Null | Default   | Constraint                                |
+| ------------------ | ------------ | ---: | --------- | ----------------------------------------- |
+| `id`               | uuid         |   no | generated | PK                                        |
+| `content_id`       | uuid         |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `entity_type`      | text         |   no | —         | —                                         |
+| `entity_value`     | text         |   no | —         | —                                         |
+| `normalized_value` | text         |  yes | —         | —                                         |
+| `confidence`       | numeric(5,4) |  yes | —         | `0..1`                                    |
+| `created_at`       | timestamptz  |   no | now       | —                                         |
 
 No fixed entity taxonomy is introduced in DB v1.
 
@@ -707,13 +707,13 @@ No fixed entity taxonomy is introduced in DB v1.
 
 Purpose: category assignments for canonical content.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `category` | text | no | — | — |
-| `confidence` | numeric(5,4) | yes | — | `0..1` |
-| `created_at` | timestamptz | no | now | — |
+| Column       | Type         | Null | Default   | Constraint                                |
+| ------------ | ------------ | ---: | --------- | ----------------------------------------- |
+| `id`         | uuid         |   no | generated | PK                                        |
+| `content_id` | uuid         |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `category`   | text         |   no | —         | —                                         |
+| `confidence` | numeric(5,4) |  yes | —         | `0..1`                                    |
+| `created_at` | timestamptz  |   no | now       | —                                         |
 
 Category vocabulary remains domain/configuration-defined.
 
@@ -723,14 +723,14 @@ Category vocabulary remains domain/configuration-defined.
 
 Purpose: structural fingerprints used by duplicate detection.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_item_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `algorithm` | varchar(64) | no | — | — |
-| `fingerprint_value` | varchar(512) | no | — | — |
-| `normalized_length` | integer | no | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column              | Type         | Null | Default   | Constraint                                |
+| ------------------- | ------------ | ---: | --------- | ----------------------------------------- |
+| `id`                | uuid         |   no | generated | PK                                        |
+| `content_item_id`   | uuid         |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `algorithm`         | varchar(64)  |   no | —         | —                                         |
+| `fingerprint_value` | varchar(512) |   no | —         | —                                         |
+| `normalized_length` | integer      |   no | —         | —                                         |
+| `created_at`        | timestamptz  |   no | now       | —                                         |
 
 Initial logical algorithm vocabulary:
 
@@ -761,14 +761,14 @@ The primary lookup index is:
 
 Purpose: preserve evidence that two distinct ContentItems represent duplicate or substantially equivalent content.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `canonical_item_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `duplicate_item_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `similarity_score` | real | no | — | `0.0..1.0` |
-| `detection_method` | varchar(64) | no | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column              | Type        | Null | Default   | Constraint                                |
+| ------------------- | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`                | uuid        |   no | generated | PK                                        |
+| `canonical_item_id` | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `duplicate_item_id` | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `similarity_score`  | real        |   no | —         | `0.0..1.0`                                |
+| `detection_method`  | varchar(64) |   no | —         | —                                         |
+| `created_at`        | timestamptz |   no | now       | —                                         |
 
 Invariants:
 
@@ -793,14 +793,14 @@ The physical schema should prevent reciprocal duplicates of the same pair from b
 
 Purpose: thematic grouping of related canonical ContentItems.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `title` | text | no | — | — |
-| `summary` | text | yes | — | — |
-| `status` | varchar(32) | no | — | `FORMING`, `ACTIVE`, `ARCHIVED`, `LOCKED` |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column       | Type        | Null | Default   | Constraint                                |
+| ------------ | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`         | uuid        |   no | generated | PK                                        |
+| `title`      | text        |   no | —         | —                                         |
+| `summary`    | text        |  yes | —         | —                                         |
+| `status`     | varchar(32) |   no | —         | `FORMING`, `ACTIVE`, `ARCHIVED`, `LOCKED` |
+| `created_at` | timestamptz |   no | now       | —                                         |
+| `updated_at` | timestamptz |   no | now       | —                                         |
 
 Stories are independent of Source identity.
 
@@ -810,15 +810,15 @@ Stories are independent of Source identity.
 
 Purpose: explicit N:M relationship between Stories and ContentItems.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `story_id` | uuid | no | — | FK → `stories.id` ON DELETE CASCADE |
-| `content_item_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `relevance_score` | real | no | — | `0.0..1.0` |
-| `membership_type` | varchar(32) | no | — | `PRIMARY`, `MENTIONED` |
-| `assignment_method` | varchar(32) | no | — | `AUTOMATIC`, `MANUAL` |
-| `added_at` | timestamptz | no | now | — |
+| Column              | Type        | Null | Default   | Constraint                                |
+| ------------------- | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`                | uuid        |   no | generated | PK                                        |
+| `story_id`          | uuid        |   no | —         | FK → `stories.id` ON DELETE CASCADE       |
+| `content_item_id`   | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `relevance_score`   | real        |   no | —         | `0.0..1.0`                                |
+| `membership_type`   | varchar(32) |   no | —         | `PRIMARY`, `MENTIONED`                    |
+| `assignment_method` | varchar(32) |   no | —         | `AUTOMATIC`, `MANUAL`                     |
+| `added_at`          | timestamptz |   no | now       | —                                         |
 
 Unique constraint:
 
@@ -836,18 +836,18 @@ There is no `updated_at` because membership rows are immutable after insert.
 
 Purpose: image discovery, resolution, and validation artifacts associated with content.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_id` | uuid | yes | — | FK → `content_items.id` ON DELETE SET NULL |
-| `source_url` | text | no | — | — |
-| `resolved_url` | text | yes | — | — |
-| `mime_type` | text | yes | — | — |
-| `width` | integer | yes | — | `> 0` |
-| `height` | integer | yes | — | `> 0` |
-| `file_size_bytes` | bigint | yes | — | `>= 0` |
-| `status` | text | no | — | domain-validated |
-| `created_at` | timestamptz | no | now | — |
+| Column            | Type        | Null | Default   | Constraint                                 |
+| ----------------- | ----------- | ---: | --------- | ------------------------------------------ |
+| `id`              | uuid        |   no | generated | PK                                         |
+| `content_id`      | uuid        |  yes | —         | FK → `content_items.id` ON DELETE SET NULL |
+| `source_url`      | text        |   no | —         | —                                          |
+| `resolved_url`    | text        |  yes | —         | —                                          |
+| `mime_type`       | text        |  yes | —         | —                                          |
+| `width`           | integer     |  yes | —         | `> 0`                                      |
+| `height`          | integer     |  yes | —         | `> 0`                                      |
+| `file_size_bytes` | bigint      |  yes | —         | `>= 0`                                     |
+| `status`          | text        |   no | —         | domain-validated                           |
+| `created_at`      | timestamptz |   no | now       | —                                          |
 
 `content_id` is nullable with `ON DELETE SET NULL`: an image may outlive its originating content item for rights and forensic purposes.
 
@@ -861,15 +861,15 @@ There is no `updated_at`.
 
 Purpose: rights and attribution evaluation for an image.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `image_id` | uuid | no | — | UNIQUE, FK → `images.id` ON DELETE CASCADE |
-| `rights_status` | text | no | — | domain-validated |
-| `source_domain` | text | yes | — | — |
-| `attribution_required` | boolean | no | false | — |
-| `attribution_text` | text | yes | — | — |
-| `evaluated_at` | timestamptz | no | now | — |
+| Column                 | Type        | Null | Default   | Constraint                                 |
+| ---------------------- | ----------- | ---: | --------- | ------------------------------------------ |
+| `id`                   | uuid        |   no | generated | PK                                         |
+| `image_id`             | uuid        |   no | —         | UNIQUE, FK → `images.id` ON DELETE CASCADE |
+| `rights_status`        | text        |   no | —         | domain-validated                           |
+| `source_domain`        | text        |  yes | —         | —                                          |
+| `attribution_required` | boolean     |   no | false     | —                                          |
+| `attribution_text`     | text        |  yes | —         | —                                          |
+| `evaluated_at`         | timestamptz |   no | now       | —                                          |
 
 The exact rights taxonomy remains outside DB v1 logical-model scope (deferred decision D-003).
 
@@ -879,15 +879,15 @@ The exact rights taxonomy remains outside DB v1 logical-model scope (deferred de
 
 Purpose: persistent identity and lifecycle for an external publication destination.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `name` | text | no | — | — |
-| `type` | text | no | — | domain-validated |
-| `external_id` | text | no | — | UNIQUE with `type` |
-| `is_active` | boolean | no | true | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column        | Type        | Null | Default   | Constraint         |
+| ------------- | ----------- | ---: | --------- | ------------------ |
+| `id`          | uuid        |   no | generated | PK                 |
+| `name`        | text        |   no | —         | —                  |
+| `type`        | text        |   no | —         | domain-validated   |
+| `external_id` | text        |   no | —         | UNIQUE with `type` |
+| `is_active`   | boolean     |   no | true      | —                  |
+| `created_at`  | timestamptz |   no | now       | —                  |
+| `updated_at`  | timestamptz |   no | now       | —                  |
 
 Unique constraint:
 
@@ -903,19 +903,19 @@ Credentials are not stored as plaintext in this table.
 
 Purpose: persisted editorial publication candidate.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `story_id` | uuid | no | — | FK → `stories.id` ON DELETE CASCADE |
-| `version` | integer | no | — | `> 0` |
-| `title` | text | no | — | — |
-| `caption` | text | no | — | — |
-| `summary` | text | no | — | — |
-| `source_url` | text | no | — | — |
-| `image_id` | uuid | yes | — | FK → `images.id` ON DELETE SET NULL |
-| `validation_status` | text | no | — | `PASS`, `FAIL`, `REVIEW` |
-| `created_at` | timestamptz | no | now | — |
+| Column              | Type        | Null | Default   | Constraint                                |
+| ------------------- | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`                | uuid        |   no | generated | PK                                        |
+| `content_id`        | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE |
+| `story_id`          | uuid        |   no | —         | FK → `stories.id` ON DELETE CASCADE       |
+| `version`           | integer     |   no | —         | `> 0`                                     |
+| `title`             | text        |   no | —         | —                                         |
+| `caption`           | text        |   no | —         | —                                         |
+| `summary`           | text        |   no | —         | —                                         |
+| `source_url`        | text        |   no | —         | —                                         |
+| `image_id`          | uuid        |  yes | —         | FK → `images.id` ON DELETE SET NULL       |
+| `validation_status` | text        |   no | —         | `PASS`, `FAIL`, `REVIEW`                  |
+| `created_at`        | timestamptz |   no | now       | —                                         |
 
 The candidate stores the content representation intended for publication and is independent from transient worker execution state.
 
@@ -927,15 +927,15 @@ There is no `updated_at` because a candidate is a versioned artifact and edits p
 
 Purpose: durable moderation decision history.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_id` | uuid | no | — | FK → `content_items.id` ON DELETE CASCADE |
-| `candidate_id` | uuid | yes | — | FK → `publication_candidates.id` ON DELETE SET NULL |
-| `user_id` | uuid | no | — | FK → `users.id` ON DELETE RESTRICT |
-| `action` | text | no | — | domain-validated |
-| `reason` | text | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column         | Type        | Null | Default   | Constraint                                          |
+| -------------- | ----------- | ---: | --------- | --------------------------------------------------- |
+| `id`           | uuid        |   no | generated | PK                                                  |
+| `content_id`   | uuid        |   no | —         | FK → `content_items.id` ON DELETE CASCADE           |
+| `candidate_id` | uuid        |  yes | —         | FK → `publication_candidates.id` ON DELETE SET NULL |
+| `user_id`      | uuid        |   no | —         | FK → `users.id` ON DELETE RESTRICT                  |
+| `action`       | text        |   no | —         | domain-validated                                    |
+| `reason`       | text        |  yes | —         | —                                                   |
+| `created_at`   | timestamptz |   no | now       | —                                                   |
 
 Canonical actions include:
 
@@ -954,17 +954,17 @@ There is no `updated_at`. Moderation records are append-only.
 
 Purpose: durable publication intent and external publication state.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `publication_candidate_id` | uuid | no | — | FK → `publication_candidates.id` ON DELETE RESTRICT |
-| `destination_id` | uuid | no | — | FK → `destinations.id` ON DELETE RESTRICT |
-| `status` | text | no | `SCHEDULED` | domain-validated |
-| `scheduled_at` | timestamptz | yes | — | — |
-| `published_at` | timestamptz | yes | — | — |
-| `external_post_id` | text | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column                     | Type        | Null | Default     | Constraint                                          |
+| -------------------------- | ----------- | ---: | ----------- | --------------------------------------------------- |
+| `id`                       | uuid        |   no | generated   | PK                                                  |
+| `publication_candidate_id` | uuid        |   no | —           | FK → `publication_candidates.id` ON DELETE RESTRICT |
+| `destination_id`           | uuid        |   no | —           | FK → `destinations.id` ON DELETE RESTRICT           |
+| `status`                   | text        |   no | `SCHEDULED` | domain-validated                                    |
+| `scheduled_at`             | timestamptz |  yes | —           | —                                                   |
+| `published_at`             | timestamptz |  yes | —           | —                                                   |
+| `external_post_id`         | text        |  yes | —           | —                                                   |
+| `created_at`               | timestamptz |   no | now         | —                                                   |
+| `updated_at`               | timestamptz |   no | now         | —                                                   |
 
 Publication states:
 
@@ -1004,18 +1004,18 @@ Purpose: durable publication execution history.
 
 This table is a business-history table for publication side effects. It is not a generic worker execution log and does not duplicate BullMQ retry metadata.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `publication_id` | uuid | no | — | FK → `publications.id` ON DELETE CASCADE |
-| `attempt_number` | integer | no | — | `> 0`, UNIQUE with publication |
-| `status` | text | no | — | domain-validated |
-| `started_at` | timestamptz | yes | — | — |
-| `finished_at` | timestamptz | yes | — | — |
-| `error_category` | text | yes | — | — |
-| `error_message` | text | yes | — | — |
-| `external_post_id` | text | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column             | Type        | Null | Default   | Constraint                               |
+| ------------------ | ----------- | ---: | --------- | ---------------------------------------- |
+| `id`               | uuid        |   no | generated | PK                                       |
+| `publication_id`   | uuid        |   no | —         | FK → `publications.id` ON DELETE CASCADE |
+| `attempt_number`   | integer     |   no | —         | `> 0`, UNIQUE with publication           |
+| `status`           | text        |   no | —         | domain-validated                         |
+| `started_at`       | timestamptz |  yes | —         | —                                        |
+| `finished_at`      | timestamptz |  yes | —         | —                                        |
+| `error_category`   | text        |  yes | —         | —                                        |
+| `error_message`    | text        |  yes | —         | —                                        |
+| `external_post_id` | text        |  yes | —         | —                                        |
+| `created_at`       | timestamptz |   no | now       | —                                        |
 
 Unique constraint:
 
@@ -1031,17 +1031,17 @@ There is no `updated_at`.
 
 Purpose: durable investigation of uncertain external publication outcomes.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `publication_id` | uuid | no | — | FK → `publications.id` ON DELETE CASCADE |
-| `attempt_id` | uuid | yes | — | FK → `publication_attempts.id` ON DELETE SET NULL |
-| `status` | text | no | — | domain-validated |
-| `checked_at` | timestamptz | yes | — | — |
-| `external_post_id` | text | yes | — | — |
-| `result` | text | yes | — | — |
-| `details` | jsonb | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column             | Type        | Null | Default   | Constraint                                        |
+| ------------------ | ----------- | ---: | --------- | ------------------------------------------------- |
+| `id`               | uuid        |   no | generated | PK                                                |
+| `publication_id`   | uuid        |   no | —         | FK → `publications.id` ON DELETE CASCADE          |
+| `attempt_id`       | uuid        |  yes | —         | FK → `publication_attempts.id` ON DELETE SET NULL |
+| `status`           | text        |   no | —         | domain-validated                                  |
+| `checked_at`       | timestamptz |  yes | —         | —                                                 |
+| `external_post_id` | text        |  yes | —         | —                                                 |
+| `result`           | text        |  yes | —         | —                                                 |
+| `details`          | jsonb       |  yes | —         | —                                                 |
+| `created_at`       | timestamptz |   no | now       | —                                                 |
 
 Reconciliation outcomes include:
 
@@ -1058,12 +1058,12 @@ There is no `updated_at`. Reconciliation records are append-oriented.
 
 Purpose: database-backed runtime configuration.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `key` | text | no | — | PK |
-| `value` | jsonb | no | — | — |
-| `updated_by` | uuid | yes | — | FK → `users.id` ON DELETE SET NULL |
-| `updated_at` | timestamptz | no | now | — |
+| Column       | Type        | Null | Default | Constraint                         |
+| ------------ | ----------- | ---: | ------- | ---------------------------------- |
+| `key`        | text        |   no | —       | PK                                 |
+| `value`      | jsonb       |   no | —       | —                                  |
+| `updated_by` | uuid        |  yes | —       | FK → `users.id` ON DELETE SET NULL |
+| `updated_at` | timestamptz |   no | now     | —                                  |
 
 The primary key is the configuration key itself (text), not a surrogate UUID. Examples include publication enablement, provider versions, and feature flags.
 
@@ -1073,16 +1073,16 @@ The primary key is the configuration key itself (text), not a surrogate UUID. Ex
 
 Purpose: append-only history of configuration changes.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `key` | text | no | — | — |
-| `old_value` | jsonb | yes | — | — |
-| `new_value` | jsonb | yes | — | — |
-| `user_id` | uuid | yes | — | FK → `users.id` ON DELETE SET NULL |
-| `reason` | text | yes | — | — |
-| `ip_address` | inet | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column       | Type        | Null | Default   | Constraint                         |
+| ------------ | ----------- | ---: | --------- | ---------------------------------- |
+| `id`         | uuid        |   no | generated | PK                                 |
+| `key`        | text        |   no | —         | —                                  |
+| `old_value`  | jsonb       |  yes | —         | —                                  |
+| `new_value`  | jsonb       |  yes | —         | —                                  |
+| `user_id`    | uuid        |  yes | —         | FK → `users.id` ON DELETE SET NULL |
+| `reason`     | text        |  yes | —         | —                                  |
+| `ip_address` | inet        |  yes | —         | —                                  |
+| `created_at` | timestamptz |   no | now       | —                                  |
 
 Records are append-only.
 
@@ -1092,17 +1092,17 @@ Records are append-only.
 
 Purpose: durable accounting of AI processing usage.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `content_id` | uuid | yes | — | FK → `content_items.id` ON DELETE SET NULL |
-| `provider` | text | no | — | — |
-| `model` | text | no | — | — |
-| `operation` | text | no | — | — |
-| `input_tokens` | integer | no | 0 | `>= 0` |
-| `output_tokens` | integer | no | 0 | `>= 0` |
-| `estimated_cost` | numeric(12,6) | no | 0 | `>= 0` |
-| `created_at` | timestamptz | no | now | — |
+| Column           | Type          | Null | Default   | Constraint                                 |
+| ---------------- | ------------- | ---: | --------- | ------------------------------------------ |
+| `id`             | uuid          |   no | generated | PK                                         |
+| `content_id`     | uuid          |  yes | —         | FK → `content_items.id` ON DELETE SET NULL |
+| `provider`       | text          |   no | —         | —                                          |
+| `model`          | text          |   no | —         | —                                          |
+| `operation`      | text          |   no | —         | —                                          |
+| `input_tokens`   | integer       |   no | 0         | `>= 0`                                     |
+| `output_tokens`  | integer       |   no | 0         | `>= 0`                                     |
+| `estimated_cost` | numeric(12,6) |   no | 0         | `>= 0`                                     |
+| `created_at`     | timestamptz   |   no | now       | —                                          |
 
 The cost currency or unit remains an application-level decision (deferred decision D-006).
 
@@ -1114,20 +1114,20 @@ There is no `updated_at`.
 
 Purpose: optionally persisted structured operational and application logs.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `level` | text | no | — | — |
-| `event` | text | no | — | — |
-| `message` | text | yes | — | — |
-| `trace_id` | uuid | yes | — | — |
-| `content_id` | uuid | yes | — | FK → `content_items.id` ON DELETE SET NULL |
-| `story_id` | uuid | yes | — | FK → `stories.id` ON DELETE SET NULL |
-| `source_id` | uuid | yes | — | FK → `sources.id` ON DELETE SET NULL |
-| `job_id` | text | yes | — | external/transient job correlation only |
-| `publication_id` | uuid | yes | — | FK → `publications.id` ON DELETE SET NULL |
-| `metadata` | jsonb | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column           | Type        | Null | Default   | Constraint                                 |
+| ---------------- | ----------- | ---: | --------- | ------------------------------------------ |
+| `id`             | uuid        |   no | generated | PK                                         |
+| `level`          | text        |   no | —         | —                                          |
+| `event`          | text        |   no | —         | —                                          |
+| `message`        | text        |  yes | —         | —                                          |
+| `trace_id`       | uuid        |  yes | —         | —                                          |
+| `content_id`     | uuid        |  yes | —         | FK → `content_items.id` ON DELETE SET NULL |
+| `story_id`       | uuid        |  yes | —         | FK → `stories.id` ON DELETE SET NULL       |
+| `source_id`      | uuid        |  yes | —         | FK → `sources.id` ON DELETE SET NULL       |
+| `job_id`         | text        |  yes | —         | external/transient job correlation only    |
+| `publication_id` | uuid        |  yes | —         | FK → `publications.id` ON DELETE SET NULL  |
+| `metadata`       | jsonb       |  yes | —         | —                                          |
+| `created_at`     | timestamptz |   no | now       | —                                          |
 
 Runtime logging does not require every log line to be persisted in PostgreSQL.
 
@@ -1139,19 +1139,19 @@ Runtime logging does not require every log line to be persisted in PostgreSQL.
 
 Purpose: durable operational notifications.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `type` | text | no | — | domain-validated |
-| `severity` | text | no | — | domain-validated |
-| `title` | text | no | — | — |
-| `message` | text | no | — | — |
-| `source_id` | uuid | yes | — | FK → `sources.id` ON DELETE SET NULL |
-| `content_id` | uuid | yes | — | FK → `content_items.id` ON DELETE SET NULL |
-| `publication_id` | uuid | yes | — | FK → `publications.id` ON DELETE SET NULL |
-| `is_read` | boolean | no | false | — |
-| `created_at` | timestamptz | no | now | — |
-| `read_at` | timestamptz | yes | — | — |
+| Column           | Type        | Null | Default   | Constraint                                 |
+| ---------------- | ----------- | ---: | --------- | ------------------------------------------ |
+| `id`             | uuid        |   no | generated | PK                                         |
+| `type`           | text        |   no | —         | domain-validated                           |
+| `severity`       | text        |   no | —         | domain-validated                           |
+| `title`          | text        |   no | —         | —                                          |
+| `message`        | text        |   no | —         | —                                          |
+| `source_id`      | uuid        |  yes | —         | FK → `sources.id` ON DELETE SET NULL       |
+| `content_id`     | uuid        |  yes | —         | FK → `content_items.id` ON DELETE SET NULL |
+| `publication_id` | uuid        |  yes | —         | FK → `publications.id` ON DELETE SET NULL  |
+| `is_read`        | boolean     |   no | false     | —                                          |
+| `created_at`     | timestamptz |   no | now       | —                                          |
+| `read_at`        | timestamptz |  yes | —         | —                                          |
 
 Notification types must cover at least:
 
@@ -1172,16 +1172,16 @@ The `type` and `severity` vocabularies are domain-validated and remain text valu
 
 Purpose: append-only cross-domain audit trail for important application and administrative events that do not already have a dedicated structured history table.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `actor_user_id` | uuid | yes | — | FK → `users.id` ON DELETE SET NULL |
-| `action` | text | no | — | domain-validated |
-| `entity_type` | text | no | — | domain-validated |
-| `entity_id` | uuid | yes | — | polymorphic entity identifier |
-| `changes` | jsonb | yes | — | — |
-| `metadata` | jsonb | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column          | Type        | Null | Default   | Constraint                         |
+| --------------- | ----------- | ---: | --------- | ---------------------------------- |
+| `id`            | uuid        |   no | generated | PK                                 |
+| `actor_user_id` | uuid        |  yes | —         | FK → `users.id` ON DELETE SET NULL |
+| `action`        | text        |   no | —         | domain-validated                   |
+| `entity_type`   | text        |   no | —         | domain-validated                   |
+| `entity_id`     | uuid        |  yes | —         | polymorphic entity identifier      |
+| `changes`       | jsonb       |  yes | —         | —                                  |
+| `metadata`      | jsonb       |  yes | —         | —                                  |
+| `created_at`    | timestamptz |   no | now       | —                                  |
 
 `actor_user_id` is nullable for system-generated events.
 
@@ -1199,19 +1199,19 @@ Purpose: technical subscription configuration for an inbound webhook from an ext
 
 A `webhook_subscriptions` row represents a concrete technical subscription belonging to a `destinations` row. It is the inbound analogue of `source_endpoints`: a destination may own multiple subscriptions, and each subscription carries its own verification secret and lifecycle.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `destination_id` | uuid | no | — | FK → `destinations.id` ON DELETE CASCADE |
-| `provider` | varchar(32) | no | — | e.g. `META` |
-| `fields` | text[] | no | — | non-empty array |
-| `verify_token_encrypted` | text | no | — | `v1:base64(iv ‖ ct ‖ tag)` |
-| `verify_token_key_version` | integer | no | — | `> 0` |
-| `status` | varchar(32) | no | — | `ACTIVE`, `PAUSED`, `DISABLED` |
-| `last_verified_at` | timestamptz | yes | — | — |
-| `last_rotated_at` | timestamptz | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column                     | Type        | Null | Default   | Constraint                               |
+| -------------------------- | ----------- | ---: | --------- | ---------------------------------------- |
+| `id`                       | uuid        |   no | generated | PK                                       |
+| `destination_id`           | uuid        |   no | —         | FK → `destinations.id` ON DELETE CASCADE |
+| `provider`                 | varchar(32) |   no | —         | e.g. `META`                              |
+| `fields`                   | text[]      |   no | —         | non-empty array                          |
+| `verify_token_encrypted`   | text        |   no | —         | `v1:base64(iv ‖ ct ‖ tag)`               |
+| `verify_token_key_version` | integer     |   no | —         | `> 0`                                    |
+| `status`                   | varchar(32) |   no | —         | `ACTIVE`, `PAUSED`, `DISABLED`           |
+| `last_verified_at`         | timestamptz |  yes | —         | —                                        |
+| `last_rotated_at`          | timestamptz |  yes | —         | —                                        |
+| `created_at`               | timestamptz |   no | now       | —                                        |
+| `updated_at`               | timestamptz |   no | now       | —                                        |
 
 Unique constraint:
 
@@ -1247,23 +1247,23 @@ Purpose: immutable receipt of a single inbound HTTP POST from an external webhoo
 
 A `webhook_events` row corresponds to one HTTP transaction: one received body, one signature verification, one idempotency key. The envelope may contain multiple entries and multiple changes; those materialize into `external_interactions` during processing.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `provider` | varchar(32) | no | — | `META` |
-| `destination_id` | uuid | yes | — | FK → `destinations.id` ON DELETE SET NULL |
-| `object_type` | varchar(32) | no | — | e.g. `page` |
-| `external_object_id` | text | no | — | Page ID from payload |
-| `field` | varchar(64) | yes | — | top-level field if extractable |
-| `idempotency_key` | text | no | — | UNIQUE |
-| `raw_payload` | jsonb | no | — | immutable |
-| `raw_body_hash` | varchar(128) | no | — | SHA-256 of raw HTTP body |
-| `signature_verified` | boolean | no | — | always `true` under fail-closed ingress |
-| `trace_id` | uuid | no | generated | propagated downstream |
-| `status` | varchar(32) | no | `RECEIVED` | see §9 |
-| `received_at` | timestamptz | no | now | — |
-| `processed_at` | timestamptz | yes | — | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column               | Type         | Null | Default    | Constraint                                |
+| -------------------- | ------------ | ---: | ---------- | ----------------------------------------- |
+| `id`                 | uuid         |   no | generated  | PK                                        |
+| `provider`           | varchar(32)  |   no | —          | `META`                                    |
+| `destination_id`     | uuid         |  yes | —          | FK → `destinations.id` ON DELETE SET NULL |
+| `object_type`        | varchar(32)  |   no | —          | e.g. `page`                               |
+| `external_object_id` | text         |   no | —          | Page ID from payload                      |
+| `field`              | varchar(64)  |  yes | —          | top-level field if extractable            |
+| `idempotency_key`    | text         |   no | —          | UNIQUE                                    |
+| `raw_payload`        | jsonb        |   no | —          | immutable                                 |
+| `raw_body_hash`      | varchar(128) |   no | —          | SHA-256 of raw HTTP body                  |
+| `signature_verified` | boolean      |   no | —          | always `true` under fail-closed ingress   |
+| `trace_id`           | uuid         |   no | generated  | propagated downstream                     |
+| `status`             | varchar(32)  |   no | `RECEIVED` | see §9                                    |
+| `received_at`        | timestamptz  |   no | now        | —                                         |
+| `processed_at`       | timestamptz  |  yes | —          | —                                         |
+| `updated_at`         | timestamptz  |   no | now        | —                                         |
 
 Unique constraint:
 
@@ -1288,18 +1288,18 @@ Purpose: durable history of processing attempts for a `webhook_events` row.
 
 This table is the business-history table for webhook processing side effects. It is not a generic worker execution log and does not duplicate BullMQ retry metadata.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `webhook_event_id` | uuid | no | — | FK → `webhook_events.id` ON DELETE CASCADE |
-| `attempt_number` | integer | no | — | `> 0`, UNIQUE with event |
-| `status` | varchar(32) | no | — | `PENDING`, `SUCCESS`, `RETRY`, `FAILED`, `DEAD_LETTER` |
-| `started_at` | timestamptz | yes | — | — |
-| `finished_at` | timestamptz | yes | — | — |
-| `error_category` | varchar(64) | yes | — | canonical taxonomy |
-| `error_message` | text | yes | — | — |
-| `worker_id` | text | yes | — | diagnostic |
-| `created_at` | timestamptz | no | now | — |
+| Column             | Type        | Null | Default   | Constraint                                             |
+| ------------------ | ----------- | ---: | --------- | ------------------------------------------------------ |
+| `id`               | uuid        |   no | generated | PK                                                     |
+| `webhook_event_id` | uuid        |   no | —         | FK → `webhook_events.id` ON DELETE CASCADE             |
+| `attempt_number`   | integer     |   no | —         | `> 0`, UNIQUE with event                               |
+| `status`           | varchar(32) |   no | —         | `PENDING`, `SUCCESS`, `RETRY`, `FAILED`, `DEAD_LETTER` |
+| `started_at`       | timestamptz |  yes | —         | —                                                      |
+| `finished_at`      | timestamptz |  yes | —         | —                                                      |
+| `error_category`   | varchar(64) |  yes | —         | canonical taxonomy                                     |
+| `error_message`    | text        |  yes | —         | —                                                      |
+| `worker_id`        | text        |  yes | —         | diagnostic                                             |
+| `created_at`       | timestamptz |   no | now       | —                                                      |
 
 Unique constraint:
 
@@ -1331,23 +1331,23 @@ Purpose: materialized inbound interaction derived from a `webhook_events` row.
 
 This is the inbound domain's independent business entity. It carries its own identity and references content lifecycle entities only loosely and optionally.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `webhook_event_id` | uuid | yes | — | FK → `webhook_events.id` ON DELETE SET NULL |
-| `destination_id` | uuid | yes | — | FK → `destinations.id` ON DELETE SET NULL |
-| `publication_id` | uuid | yes | — | FK → `publications.id` ON DELETE SET NULL |
-| `interaction_type` | varchar(32) | no | — | `COMMENT`, `REACTION`, `MENTION` |
-| `external_interaction_id` | text | no | — | Meta-side identifier |
-| `parent_external_id` | text | yes | — | reply target, if any |
-| `actor_external_id` | text | yes | — | Meta user identifier |
-| `actor_display_name` | text | yes | — | — |
-| `content` | text | yes | — | comment text, if any |
-| `permalink` | text | yes | — | — |
-| `occurred_at` | timestamptz | no | — | provider event time |
-| `raw_metadata` | jsonb | no | `{}` | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column                    | Type        | Null | Default   | Constraint                                  |
+| ------------------------- | ----------- | ---: | --------- | ------------------------------------------- |
+| `id`                      | uuid        |   no | generated | PK                                          |
+| `webhook_event_id`        | uuid        |  yes | —         | FK → `webhook_events.id` ON DELETE SET NULL |
+| `destination_id`          | uuid        |  yes | —         | FK → `destinations.id` ON DELETE SET NULL   |
+| `publication_id`          | uuid        |  yes | —         | FK → `publications.id` ON DELETE SET NULL   |
+| `interaction_type`        | varchar(32) |   no | —         | `COMMENT`, `REACTION`, `MENTION`            |
+| `external_interaction_id` | text        |   no | —         | Meta-side identifier                        |
+| `parent_external_id`      | text        |  yes | —         | reply target, if any                        |
+| `actor_external_id`       | text        |  yes | —         | Meta user identifier                        |
+| `actor_display_name`      | text        |  yes | —         | —                                           |
+| `content`                 | text        |  yes | —         | comment text, if any                        |
+| `permalink`               | text        |  yes | —         | —                                           |
+| `occurred_at`             | timestamptz |   no | —         | provider event time                         |
+| `raw_metadata`            | jsonb       |   no | `{}`      | —                                           |
+| `created_at`              | timestamptz |   no | now       | —                                           |
+| `updated_at`              | timestamptz |   no | now       | —                                           |
 
 Unique constraint:
 
@@ -1373,22 +1373,22 @@ The `publication_id` FK to `publications.id` is added by the deferred migration 
 
 Purpose: encrypted storage of provider authentication material with lifecycle tracking.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `scope` | varchar(32) | no | — | `APP`, `DESTINATION` |
-| `destination_id` | uuid | yes | — | FK → `destinations.id` ON DELETE CASCADE |
-| `provider` | varchar(32) | no | — | e.g. `META` |
-| `credential_type` | varchar(64) | no | — | `APP_SECRET`, `PAGE_ACCESS_TOKEN` |
-| `encrypted_value` | text | no | — | `v1:base64(iv ‖ ct ‖ tag)` |
-| `encryption_key_version` | integer | no | — | `> 0` |
-| `status` | varchar(32) | no | `UNKNOWN` | `VALID`, `EXPIRING`, `INVALID`, `UNKNOWN` |
-| `expires_at` | timestamptz | yes | — | — |
-| `last_validated_at` | timestamptz | yes | — | — |
-| `last_rotation_at` | timestamptz | yes | — | — |
-| `rotation_reason` | text | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column                   | Type        | Null | Default   | Constraint                                |
+| ------------------------ | ----------- | ---: | --------- | ----------------------------------------- |
+| `id`                     | uuid        |   no | generated | PK                                        |
+| `scope`                  | varchar(32) |   no | —         | `APP`, `DESTINATION`                      |
+| `destination_id`         | uuid        |  yes | —         | FK → `destinations.id` ON DELETE CASCADE  |
+| `provider`               | varchar(32) |   no | —         | e.g. `META`                               |
+| `credential_type`        | varchar(64) |   no | —         | `APP_SECRET`, `PAGE_ACCESS_TOKEN`         |
+| `encrypted_value`        | text        |   no | —         | `v1:base64(iv ‖ ct ‖ tag)`                |
+| `encryption_key_version` | integer     |   no | —         | `> 0`                                     |
+| `status`                 | varchar(32) |   no | `UNKNOWN` | `VALID`, `EXPIRING`, `INVALID`, `UNKNOWN` |
+| `expires_at`             | timestamptz |  yes | —         | —                                         |
+| `last_validated_at`      | timestamptz |  yes | —         | —                                         |
+| `last_rotation_at`       | timestamptz |  yes | —         | —                                         |
+| `rotation_reason`        | text        |  yes | —         | —                                         |
+| `created_at`             | timestamptz |   no | now       | —                                         |
+| `updated_at`             | timestamptz |   no | now       | —                                         |
 
 Unique constraint:
 
@@ -1421,20 +1421,20 @@ Encryption:
 
 Purpose: durable intent to publish an outbound response to an `external_interactions` row.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `interaction_id` | uuid | no | — | FK → `external_interactions.id` ON DELETE CASCADE |
-| `destination_id` | uuid | no | — | FK → `destinations.id` ON DELETE SET NULL |
-| `template_id` | text | yes | — | reference into `system_config` |
-| `template_version` | integer | no | 1 | `>= 1` |
-| `body` | text | yes | — | final response text (may be set post-moderation) |
-| `status` | varchar(32) | no | `DRAFT` | see §9.3 |
-| `scheduled_at` | timestamptz | yes | — | — |
-| `responded_at` | timestamptz | yes | — | — |
-| `external_response_id` | text | yes | — | Meta-side identifier |
-| `created_at` | timestamptz | no | now | — |
-| `updated_at` | timestamptz | no | now | — |
+| Column                 | Type        | Null | Default   | Constraint                                        |
+| ---------------------- | ----------- | ---: | --------- | ------------------------------------------------- |
+| `id`                   | uuid        |   no | generated | PK                                                |
+| `interaction_id`       | uuid        |   no | —         | FK → `external_interactions.id` ON DELETE CASCADE |
+| `destination_id`       | uuid        |   no | —         | FK → `destinations.id` ON DELETE SET NULL         |
+| `template_id`          | text        |  yes | —         | reference into `system_config`                    |
+| `template_version`     | integer     |   no | 1         | `>= 1`                                            |
+| `body`                 | text        |  yes | —         | final response text (may be set post-moderation)  |
+| `status`               | varchar(32) |   no | `DRAFT`   | see §9.3                                          |
+| `scheduled_at`         | timestamptz |  yes | —         | —                                                 |
+| `responded_at`         | timestamptz |  yes | —         | —                                                 |
+| `external_response_id` | text        |  yes | —         | Meta-side identifier                              |
+| `created_at`           | timestamptz |   no | now       | —                                                 |
+| `updated_at`           | timestamptz |   no | now       | —                                                 |
 
 Unique constraint:
 
@@ -1454,19 +1454,19 @@ Invariants:
 
 Purpose: durable history of outbound response execution.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `response_id` | uuid | no | — | FK → `interaction_responses.id` ON DELETE CASCADE |
-| `attempt_number` | integer | no | — | `> 0`, UNIQUE with response |
-| `status` | varchar(32) | no | — | `PENDING`, `SUCCESS`, `RETRY`, `FAILED`, `DEAD_LETTER`, `UNKNOWN` |
-| `started_at` | timestamptz | yes | — | — |
-| `finished_at` | timestamptz | yes | — | — |
-| `error_category` | varchar(64) | yes | — | canonical taxonomy |
-| `error_message` | text | yes | — | — |
-| `external_response_id` | text | yes | — | — |
-| `request_payload_hash` | varchar(128) | no | — | SHA-256 of outbound body |
-| `created_at` | timestamptz | no | now | — |
+| Column                 | Type         | Null | Default   | Constraint                                                        |
+| ---------------------- | ------------ | ---: | --------- | ----------------------------------------------------------------- |
+| `id`                   | uuid         |   no | generated | PK                                                                |
+| `response_id`          | uuid         |   no | —         | FK → `interaction_responses.id` ON DELETE CASCADE                 |
+| `attempt_number`       | integer      |   no | —         | `> 0`, UNIQUE with response                                       |
+| `status`               | varchar(32)  |   no | —         | `PENDING`, `SUCCESS`, `RETRY`, `FAILED`, `DEAD_LETTER`, `UNKNOWN` |
+| `started_at`           | timestamptz  |  yes | —         | —                                                                 |
+| `finished_at`          | timestamptz  |  yes | —         | —                                                                 |
+| `error_category`       | varchar(64)  |  yes | —         | canonical taxonomy                                                |
+| `error_message`        | text         |  yes | —         | —                                                                 |
+| `external_response_id` | text         |  yes | —         | —                                                                 |
+| `request_payload_hash` | varchar(128) |   no | —         | SHA-256 of outbound body                                          |
+| `created_at`           | timestamptz  |   no | now       | —                                                                 |
 
 Unique constraint:
 
@@ -1482,15 +1482,15 @@ Unique constraint:
 
 Purpose: durable moderation decision history for `interaction_responses`.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `response_id` | uuid | no | — | FK → `interaction_responses.id` ON DELETE CASCADE |
-| `user_id` | uuid | no | — | FK → `users.id` ON DELETE RESTRICT |
-| `action` | varchar(32) | no | — | `APPROVE`, `REJECT`, `EDIT`, `ESCALATE` |
-| `reason` | text | yes | — | — |
-| `previous_body` | text | yes | — | required when `action = 'EDIT'` |
-| `created_at` | timestamptz | no | now | — |
+| Column          | Type        | Null | Default   | Constraint                                        |
+| --------------- | ----------- | ---: | --------- | ------------------------------------------------- |
+| `id`            | uuid        |   no | generated | PK                                                |
+| `response_id`   | uuid        |   no | —         | FK → `interaction_responses.id` ON DELETE CASCADE |
+| `user_id`       | uuid        |   no | —         | FK → `users.id` ON DELETE RESTRICT                |
+| `action`        | varchar(32) |   no | —         | `APPROVE`, `REJECT`, `EDIT`, `ESCALATE`           |
+| `reason`        | text        |  yes | —         | —                                                 |
+| `previous_body` | text        |  yes | —         | required when `action = 'EDIT'`                   |
+| `created_at`    | timestamptz |   no | now       | —                                                 |
 
 This table is deliberately separate from `moderation_actions` because that table is scoped to `publication_candidates` (content lifecycle), whereas this table is scoped to inbound interactions.
 
@@ -1502,16 +1502,16 @@ This table is deliberately separate from `moderation_actions` because that table
 
 Purpose: durable investigation of uncertain outbound response outcomes.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `response_id` | uuid | no | — | FK → `interaction_responses.id` ON DELETE CASCADE |
-| `attempt_id` | uuid | yes | — | FK → `interaction_response_attempts.id` ON DELETE SET NULL |
-| `status` | varchar(32) | no | — | `RESPONDED`, `RETRY_ELIGIBLE`, `UNKNOWN` |
-| `checked_at` | timestamptz | yes | — | — |
-| `external_response_id` | text | yes | — | — |
-| `details` | jsonb | yes | — | — |
-| `created_at` | timestamptz | no | now | — |
+| Column                 | Type        | Null | Default   | Constraint                                                 |
+| ---------------------- | ----------- | ---: | --------- | ---------------------------------------------------------- |
+| `id`                   | uuid        |   no | generated | PK                                                         |
+| `response_id`          | uuid        |   no | —         | FK → `interaction_responses.id` ON DELETE CASCADE          |
+| `attempt_id`           | uuid        |  yes | —         | FK → `interaction_response_attempts.id` ON DELETE SET NULL |
+| `status`               | varchar(32) |   no | —         | `RESPONDED`, `RETRY_ELIGIBLE`, `UNKNOWN`                   |
+| `checked_at`           | timestamptz |  yes | —         | —                                                          |
+| `external_response_id` | text        |  yes | —         | —                                                          |
+| `details`              | jsonb       |  yes | —         | —                                                          |
+| `created_at`           | timestamptz |   no | now       | —                                                          |
 
 Reconciliation may proceed via two paths:
 
@@ -1528,19 +1528,19 @@ Purpose: unified transactional outbox for every durable domain transition that m
 
 This table is a **platform primitive**. It is used by the webhook ingress, publication scheduling, credential refresh, and any future subsystem that must enqueue work inside a PostgreSQL transaction.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `id` | uuid | no | generated | PK |
-| `queue_name` | varchar(64) | no | — | BullMQ queue name |
-| `job_id` | text | no | — | UNIQUE — BullMQ deduplication key |
-| `payload` | jsonb | no | — | identifiers only (§21) |
-| `status` | varchar(32) | no | `PENDING` | `PENDING`, `DISPATCHING`, `DISPATCHED`, `FAILED` |
-| `attempts` | integer | no | 0 | `>= 0` |
-| `last_attempt_at` | timestamptz | yes | — | — |
-| `last_error` | text | yes | — | — |
-| `dispatched_at` | timestamptz | yes | — | — |
-| `trace_id` | uuid | yes | — | nullable correlation |
-| `created_at` | timestamptz | no | now | — |
+| Column            | Type        | Null | Default   | Constraint                                       |
+| ----------------- | ----------- | ---: | --------- | ------------------------------------------------ |
+| `id`              | uuid        |   no | generated | PK                                               |
+| `queue_name`      | varchar(64) |   no | —         | BullMQ queue name                                |
+| `job_id`          | text        |   no | —         | UNIQUE — BullMQ deduplication key                |
+| `payload`         | jsonb       |   no | —         | identifiers only (§21)                           |
+| `status`          | varchar(32) |   no | `PENDING` | `PENDING`, `DISPATCHING`, `DISPATCHED`, `FAILED` |
+| `attempts`        | integer     |   no | 0         | `>= 0`                                           |
+| `last_attempt_at` | timestamptz |  yes | —         | —                                                |
+| `last_error`      | text        |  yes | —         | —                                                |
+| `dispatched_at`   | timestamptz |  yes | —         | —                                                |
+| `trace_id`        | uuid        |  yes | —         | nullable correlation                             |
+| `created_at`      | timestamptz |   no | now       | —                                                |
 
 Unique constraint:
 
@@ -1575,17 +1575,17 @@ Purpose: operational health extension for a `webhook_subscriptions` row.
 
 The table is a strict 1:1 extension of `webhook_subscriptions`. It mirrors the pattern established by `source_endpoint_health` in DB v1 core (§5.5) and preserves operational health history that cannot be reconstructed later from `audit_logs` or `system_logs`.
 
-| Column | Type | Null | Default | Constraint |
-|---|---|---:|---|---|
-| `subscription_id` | uuid | no | — | PK, FK → `webhook_subscriptions.id` ON DELETE CASCADE |
-| `consecutive_failures` | integer | no | 0 | `>= 0` |
-| `consecutive_successes` | integer | no | 0 | `>= 0` |
-| `last_success_at` | timestamptz | yes | — | — |
-| `last_failure_at` | timestamptz | yes | — | — |
-| `last_error_category` | varchar(64) | yes | — | canonical taxonomy from §5.36 |
-| `last_error_message` | text | yes | — | — |
-| `events_today` | integer | no | 0 | `>= 0` |
-| `updated_at` | timestamptz | no | now | — |
+| Column                  | Type        | Null | Default | Constraint                                            |
+| ----------------------- | ----------- | ---: | ------- | ----------------------------------------------------- |
+| `subscription_id`       | uuid        |   no | —       | PK, FK → `webhook_subscriptions.id` ON DELETE CASCADE |
+| `consecutive_failures`  | integer     |   no | 0       | `>= 0`                                                |
+| `consecutive_successes` | integer     |   no | 0       | `>= 0`                                                |
+| `last_success_at`       | timestamptz |  yes | —       | —                                                     |
+| `last_failure_at`       | timestamptz |  yes | —       | —                                                     |
+| `last_error_category`   | varchar(64) |  yes | —       | canonical taxonomy from §5.36                         |
+| `last_error_message`    | text        |  yes | —       | —                                                     |
+| `events_today`          | integer     |   no | 0       | `>= 0`                                                |
+| `updated_at`            | timestamptz |   no | now     | —                                                     |
 
 Invariants:
 

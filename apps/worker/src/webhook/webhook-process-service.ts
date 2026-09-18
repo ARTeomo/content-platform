@@ -23,20 +23,6 @@ export type ProcessOutcome =
   | { status: 'FAILED'; error: string }
   | { status: 'SKIPPED'; reason: string };
 
-/**
- * Process a single `webhook_events` row.
- *
- * This service is queue-agnostic. The BullMQ worker simply calls
- * `processEvent(id)`; the same service can be invoked from a manual
- * admin endpoint for reprocessing.
- *
- * ## Status flow
- *
- *   RECEIVED ──► PROCESSING ──┬──► PROCESSED
- *                             └──► FAILED (retry-eligible)
- *
- * Already-`PROCESSED` or `DEAD_LETTER` events are skipped silently.
- */
 export class WebhookProcessService {
   private readonly deps: WebhookProcessServiceDeps;
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -60,15 +46,8 @@ export class WebhookProcessService {
     if (!event) return { status: 'SKIPPED', reason: 'event not found' };
     if (event.status === 'PROCESSED') return { status: 'SKIPPED', reason: 'already processed' };
     if (event.status === 'DEAD_LETTER') return { status: 'SKIPPED', reason: 'dead letter' };
-    if (!event.destinationId) {
-      await this.failEvent(event.id, null, 'UNKNOWN_DESTINATION', 'Event has no destination id');
-      return { status: 'FAILED', error: 'unknown destination' };
-    }
 
-    const destinationId = event.destinationId;
-
-    // Start the attempt: atomically mark PROCESSING and record the
-    // delivery row.
+    // Always create a delivery attempt row, even for early failures.
     const delivery = await txManager.run(async (tx) => {
       await eventsRepo.markProcessing(tx, event.id);
       return await deliveriesRepo.startAttempt(tx, {
@@ -76,6 +55,19 @@ export class WebhookProcessService {
         workerId: 'webhook.process',
       });
     });
+
+    if (!event.destinationId) {
+      await this.failDelivery(
+        delivery.id,
+        event.id,
+        'UNKNOWN_DESTINATION',
+        'Event has no destination id',
+      );
+      this.log.warn(`[webhook.process] event ${event.id} failed: unknown destination`);
+      return { status: 'FAILED', error: 'unknown destination' };
+    }
+
+    const destinationId = event.destinationId;
 
     const envelope = event.rawPayload as MetaWebhookEnvelope;
     if (!envelope || typeof envelope !== 'object' || !Array.isArray(envelope.entry)) {
@@ -85,6 +77,7 @@ export class WebhookProcessService {
         'PAYLOAD_MALFORMED',
         'Envelope has no entry array',
       );
+      this.log.warn(`[webhook.process] event ${event.id} failed: malformed envelope`);
       return { status: 'FAILED', error: 'malformed envelope' };
     }
 
@@ -124,6 +117,7 @@ export class WebhookProcessService {
 
     if (errors.length > 0) {
       await this.failDelivery(delivery.id, event.id, 'PROCESSING_ERROR', errors.join('; '));
+      this.log.warn(`[webhook.process] event ${event.id} failed: ${errors.join('; ')}`);
       return { status: 'FAILED', error: errors.join('; ') };
     }
 
@@ -138,9 +132,9 @@ export class WebhookProcessService {
     return { status: 'PROCESSED', interactionsCreated };
   }
 
-  private async failEvent(
+  private async failDelivery(
+    deliveryId: string,
     eventId: string,
-    deliveryId: string | null,
     category: string,
     message: string,
   ): Promise<void> {
@@ -148,18 +142,7 @@ export class WebhookProcessService {
     const at = new Date();
     await txManager.run(async (tx) => {
       await eventsRepo.markFailed(tx, eventId);
-      if (deliveryId) {
-        await deliveriesRepo.finishFailure(tx, deliveryId, at, 'FAILED', category, message);
-      }
+      await deliveriesRepo.finishFailure(tx, deliveryId, at, 'FAILED', category, message);
     });
-  }
-
-  private async failDelivery(
-    deliveryId: string,
-    eventId: string,
-    category: string,
-    message: string,
-  ): Promise<void> {
-    await this.failEvent(eventId, deliveryId, category, message);
   }
 }

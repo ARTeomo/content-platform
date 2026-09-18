@@ -52,6 +52,12 @@ async function main(): Promise<void> {
         redisUrl: config.redisUrl,
         queueName: options.queueName,
         processor: options.processor,
+        onFailed: (jobId, err) => {
+          console.error(`[webhook.process] job ${jobId ?? '<unknown>'} failed: ${err.message}`);
+        },
+        onError: (err) => {
+          console.error(`[webhook.process] consumer error: ${err.message}`);
+        },
       }),
     service: webhookProcessService,
   });

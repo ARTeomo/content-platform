@@ -3,9 +3,89 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-09-17
-**Last commit:** `eba1ddb` (chore(api): apply prettier formatting)
+**Snapshot date:** 2026-09-18
+**Last commit:** `d2edda1` (fix(api): resolve destination from meta page id)
 **Repository:** https://github.com/ARTeomo/content-platform
+
+---
+
+## Milestone: Phase 18a complete — real Meta E2E verified
+
+The complete inbound Meta integration is verified end-to-end against
+the **real Meta Graph API** in **Live** mode. A real comment on the
+`contentplatform.dev` Page produced a real `external_interactions` row.
+
+```
+Meta POST (HTTPS, Live mode)
+  → ngrok tunnel
+  → apps/api POST /api/v1/webhooks/meta
+      1. HMAC-SHA256 signature verify (fail-closed → 401)
+      2. Zod envelope validate (fail-closed → 400)
+      3. Resolve destination from entry[0].id (Meta Page ID)
+      4. Single PostgreSQL transaction:
+           INSERT webhook_events (ON CONFLICT DO NOTHING RETURNING id)
+           IF inserted:
+             INSERT outbox_jobs (queue_name = 'webhook.process')
+      5. HTTP 200 OK
+  → OutboxDispatcher (FOR UPDATE SKIP LOCKED claim)
+  → BullMQ webhook.process queue
+  → WebhookProcessWorker
+  → WebhookProcessService
+  → external_interactions (monotonic upsert on occurred_at)
+```
+
+Evidence (real Meta event, 2026-09-18 20:33 UTC):
+
+```
+webhook_events:        external_object_id = '1287488901121523'
+                       status              = 'PROCESSED'
+external_interactions: interaction_type    = 'COMMENT'
+                       external_id         = '122094187437489537_1582353133389249'
+                       content             = 'This is the very first comment on Content Platform.'
+worker log:            [webhook.process] event 87f0c082-... processed: 1 interactions
+```
+
+The `feed` field with `item: 'status'` (Page's own post creation) is
+correctly skipped — `FeedChangeExtractor` only materializes `comment`,
+`reaction`, and `mention`. Verified by:
+
+```
+[webhook.process] event 35e49212-... processed: 0 interactions   (status)
+[webhook.process] event 87f0c082-... processed: 1 interactions   (comment)
+```
+
+---
+
+## Meta App configuration (recorded for continuity)
+
+| Item | Value |
+|---|---|
+| Meta App ID | `915404831335846` |
+| Meta App Mode | **Live** |
+| Business portfolio ID | `1416443380591994` |
+| Business portfolio name | `Content Platform` |
+| Page ID (Facebook) | `1287488901121523` |
+| Page username | `contentplatform.dev` |
+| System User | `contentplatform-bot` (`61594178114698`) |
+| Subscribed fields | `feed`, `mention` |
+| Verify token | `content-platform-verify-2026` |
+| Ngrok URL (current) | `https://uncanny-reappoint-unaligned.ngrok-free.dev` |
+
+Database records created during Phase 18a E2E:
+
+| Table | ID |
+|---|---|
+| `destinations.id` | `51eb5e79-b6a5-4f51-86bb-23dd81e9167e` |
+| `webhook_subscriptions.id` | `2bc850b3-3e93-45d7-98cd-45e07a2daf00` |
+
+**Security note:** the Meta App Secret and the ngrok authtoken appeared
+in the development chat during setup. Rotate both before any external
+collaboration:
+- App Secret: `developers.facebook.com/apps/915404831335846/settings/basic/` → Reset
+- Ngrok token: `dashboard.ngrok.com/get-started/your-authtoken` → Regenerate
+
+The System User token is stored only in the browser session and is not
+committed to the repository.
 
 ---
 
@@ -67,25 +147,6 @@ green against Neon PostgreSQL + Upstash Redis.
 
 ### Webhook inbound pipeline — COMPLETE
 
-```
-Meta POST (HTTPS)
-  → apps/api  POST /api/v1/webhooks/meta
-      1. Raw body buffer (Fastify addContentTypeParser, parseAs: 'buffer')
-      2. HMAC-SHA256 signature verify (fail-closed → 401)
-      3. Zod envelope validate (fail-closed → 400)
-      4. Single PostgreSQL transaction:
-           INSERT webhook_events (ON CONFLICT DO NOTHING RETURNING id, trace_id)
-           IF a row was inserted:
-             INSERT outbox_jobs (queue_name = 'webhook.process',
-                                 job_id = 'webhook.process:' || event.id)
-      5. HTTP 200 OK
-  → OutboxDispatcher (FOR UPDATE SKIP LOCKED claim)
-  → BullMQ webhook.process queue
-  → WebhookProcessWorker
-  → WebhookProcessService
-  → external_interactions (monotonic upsert on occurred_at)
-```
-
 The `GET /api/v1/webhooks/meta` handshake is also implemented:
 
 1. `hub.mode` must be `subscribe`, `hub.verify_token` and `hub.challenge` required
@@ -104,12 +165,12 @@ The `GET /api/v1/webhooks/meta` handshake is also implemented:
 
 ### `apps/api` — routes
 
-| Method | Path                    | Purpose                                   |
-| ------ | ----------------------- | ----------------------------------------- |
-| GET    | `/health`               | Liveness                                  |
-| GET    | `/ready`                | Readiness with DB health check            |
-| POST   | `/api/v1/webhooks/meta` | Webhook ingress (signature + tx + outbox) |
-| GET    | `/api/v1/webhooks/meta` | Meta `hub.challenge` handshake            |
+| Method | Path                       | Purpose                                            |
+| ------ | -------------------------- | -------------------------------------------------- |
+| GET    | `/health`                  | Liveness                                           |
+| GET    | `/ready`                   | Readiness with DB health check                     |
+| POST   | `/api/v1/webhooks/meta`    | Webhook ingress (signature + tx + outbox)          |
+| GET    | `/api/v1/webhooks/meta`    | Meta `hub.challenge` handshake                     |
 
 ### Cloud services
 
@@ -120,10 +181,9 @@ The `GET /api/v1/webhooks/meta` handshake is also implemented:
 
 **No local Docker.** The development machine runs Windows 10 1607
 (build 14393) with 4 GB RAM. Docker Desktop requires Win 10 22H2
-(build 19045) and 8 GB RAM, so the local Docker workflow is not
-available. Cloud services match the production topology and are the
-supported development path. `docker-compose.yml` is retained in the
-repository as a reference for future environments.
+(build 19045) and 8 GB RAM. Cloud services are the supported
+development path. `docker-compose.yml` is retained in the repository
+as a reference for future environments.
 
 ### Toolchain
 
@@ -160,91 +220,52 @@ Top-level specification documents in the repository root:
 
 ## Pending items
 
-### 1. Meta sandbox E2E test — prepared, blocked
+### 1. Meta App Secret and ngrok authtoken rotation
 
-The Meta Business Suite portfolio **Content Platform** has been created
-(registered under the user's own name). The next step — adding objects to
-the portfolio — was reached but not completed. A Facebook Page is
-required for the test.
+Both appeared in the development chat. Rotate before any external
+collaboration.
 
-The Meta App itself has **not** been created yet on
-`developers.facebook.com`.
+### 2. `LOGICAL_MODEL_SPECIFICATION.md`
 
-The `webhook_subscriptions` table has no row for the test destination
-yet, so the `GET` handshake will find nothing to compare against. A
-one-shot script is required to:
+Confirm presence in the repository root. The `README.md` links to it.
 
-1. Insert a `destinations` row for the test Page (Page ID from the Meta Page).
-2. Insert a `webhook_subscriptions` row with the encrypted verify token
-   (format `v1:base64(iv ‖ ciphertext ‖ tag)`, AAD `META:${destination_id}`).
+### 3. Ngrok URL is ephemeral
 
-### 2. Phase 18b — `webhook.respond`
+The free ngrok URL changes on every restart. Meta's Webhooks → Page
+configuration and the Webhook fields test both use this URL. Each
+restart requires updating the Callback URL in the Meta dashboard.
+
+For long-running development, consider a paid ngrok plan with a static
+domain, or deploy `apps/api` behind a public HTTPS endpoint.
+
+### 4. Phase 18b — `webhook.respond`
 
 Not started. The largest single phase so far (estimated 4000–4500 lines
-across repositories, services, workers, and tests). Requires:
+across repositories, services, workers, and tests — 3 sessions).
+Requires:
 
-- 4 new repositories (responses, attempts, moderation, reconciliations)
+- 4 new repositories (`interaction_responses`, `interaction_response_attempts`,
+  `interaction_moderation_actions`, `interaction_response_reconciliations`)
 - Policy engine, template renderer, moderation gate
 - `MetaInteractionAdapter` (Graph API comment reply)
 - 2 new queues (`webhook.respond`, `webhook.respond.reconcile`)
 - Push-reconciliation hook in the existing `WebhookProcessService`
 
-### 3. `LOGICAL_MODEL_SPECIFICATION.md`
+The `interaction_responses` state machine has 15 statuses
+(`DRAFT`, `AUTO_RESPOND`, `MODERATION_REQUIRED`, `APPROVED`, `REJECTED`,
+`EDITED`, `SCHEDULED`, `QUEUED`, `IN_PROGRESS`, `RESPONDED`, `RETRY`,
+`FAILED`, `CANCELLED`, `UNKNOWN`, `RECONCILIATION`).
 
-The `README.md` and `docs/README.md` link to it at the repository root.
-If it is not present, the link returns 404. Verify its presence before
-continuing.
+Rate limiting applies at three points: policy engine (coarse filter),
+queue enqueue (fine scheduling), adapter (fail-closed protection).
 
----
+`TECHNICAL_SPECIFICATION.md` §142 specifies the full lifecycle.
 
-## Next steps — Meta sandbox E2E
+### Alternative before Phase 18b
 
-1. **Add a Facebook Page to the Meta Business Suite portfolio.**
-   - Use "Content Platform" as the Page name (or add an existing Page).
-   - Record: **Page ID** (this becomes `destinations.external_id`) and
-     the Page name (this becomes `destinations.name`).
-   - Skip Instagram, Pixel, and Data Sources for now.
-
-2. **Create a Meta App** on `developers.facebook.com/apps`.
-   - Type: **Business**.
-   - Name: `content-platform-dev`.
-   - Mode: **Development** (no App Review needed).
-   - Record: **App ID** (not secret) and **App Secret** (Show → copy).
-   - Add Product → **Webhooks** → Set Up.
-
-3. **Install and start ngrok.**
-   - `ngrok config add-authtoken <token>`
-   - `ngrok http 3000`
-   - Record the HTTPS forwarding URL: `https://<id>.ngrok-free.app`.
-
-4. **Configure `.env`** with the following values:
-   - `META_APP_ID=<app-id>`
-   - `META_APP_SECRET=<app-secret>`
-   - `WEBHOOK_TOKEN_ENCRYPTION_KEY=<base64-32-bytes>` (`openssl rand -base64 32`)
-   - `PORT=3000`, `HOST=0.0.0.0`
-
-5. **Insert a `destinations` + `webhook_subscriptions` row** for the test
-   Page (a small script to be written in the next session).
-
-6. **Start the API** (`pnpm --filter @content-platform/api start`) and the
-   **worker** (`pnpm --filter @content-platform/worker start`) in separate
-   terminals.
-
-7. **Verify in the Meta dashboard** — Webhooks → Page:
-   - Callback URL: `https://<ngrok>.ngrok-free.app/api/v1/webhooks/meta`
-   - Verify Token: the same value that was encrypted in step 5.
-   - Click **Verify and Save**.
-
-8. **Subscribe to the `feed` field** and send a test event (Meta Test
-   button, or a real comment on the Page).
-
-9. **Verify the DB:**
-   - `webhook_events` — one row, status `RECEIVED` → `PROCESSING` → `PROCESSED`
-   - `outbox_jobs` — one row, status `DISPATCHED`
-   - `external_interactions` — one row with the comment/reaction/mention
-
-Estimated time: **2–4 hours** across all 9 steps, with 2–3 iterations
-expected on the handshake (steps 7–8 are where most issues surface).
+Deploy `apps/api` + `apps/worker` to a staging VPS to remove the ngrok
+dependency. This makes the Meta integration stable and lets Phase 18b
+be developed against a fixed webhook URL.
 
 ---
 
@@ -327,7 +348,7 @@ workspace package's `vitest.config.ts` sets `fileParallelism: false`.
 ### pnpm `-r` runs packages in parallel — use `--workspace-concurrency=1`
 
 Even with `fileParallelism: false` inside each package, `pnpm -r` still
-runs the _packages_ themselves in parallel. For tests that share a
+runs the *packages* themselves in parallel. For tests that share a
 single PostgreSQL database (like this project), the root `test` script
 must be:
 
@@ -352,14 +373,18 @@ raw bytes needed for HMAC-SHA256 signature verification. The fix is a
 custom content-type parser:
 
 ```typescript
-app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
-  request.rawBody = body as Buffer;
-  try {
-    done(null, JSON.parse((body as Buffer).toString('utf8')));
-  } catch (err) {
-    done(err as Error, undefined);
-  }
-});
+app.addContentTypeParser(
+  'application/json',
+  { parseAs: 'buffer' },
+  (request, body, done) => {
+    request.rawBody = body as Buffer;
+    try {
+      done(null, JSON.parse((body as Buffer).toString('utf8')));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  },
+);
 ```
 
 The `rawBody` is attached to the request via a `declare module 'fastify'`
@@ -383,6 +408,67 @@ await tx.insert(webhookEvents).values({
 
 This pattern is used in `apps/api/src/routes/webhooks/meta.ts` and in
 several database repositories.
+
+### Meta Test button sends dummy Page ID
+
+The Meta dashboard "Test" button sends `entry[0].id = "0"`, not the
+real Page ID. In Development mode this is the only webhook source. The
+ingress resolves destination from `entry[0].id`, so `"0"` never matches,
+and the event ends up `FAILED` with `UNKNOWN_DESTINATION`. To test the
+real path, the app must be in **Live mode** and events must come from
+real user actions.
+
+### Meta App must be in Live mode
+
+Development mode does not deliver real webhook events from any source,
+including app admins, developers, or testers. The Meta dashboard states
+this explicitly. To receive real events:
+
+1. Provide `Privacy Policy URL` — a public GitHub Gist works. Example:
+   create a public Gist with the Privacy Policy Markdown, then paste the
+   Gist URL into App Settings → Basic → Privacy Policy URL.
+2. Provide `App Icon` — 1024×1024 PNG with transparent background.
+   A PowerShell script that generates one is possible with
+   `System.Drawing.Bitmap` + `Format32bppArgb` + `Graphics.Clear(Transparent)`.
+3. Provide `Category` — e.g., `News and Media` or `Business and Pages`.
+4. Switch App Mode to **Live** via the Dashboard toggle.
+
+### Meta Business Suite System User
+
+For stable Page access independent of a personal Facebook account, use
+a **System User**:
+
+1. Business Suite → Settings → Users → System Users → Add.
+2. Role: Admin.
+3. On the System User details page, use **Assign Assets** to attach:
+   - **Pages** → target Page → Full Control
+   - **Apps** → Meta App → Full Control
+4. Generate token: App = Meta App, duration = 60 days, permissions
+   include `pages_manage_metadata`, `pages_read_engagement`,
+   `pages_show_list`.
+5. Use the resulting token directly in Graph API Explorer's **Access
+   Token** field. Do not use the "User or Page" dropdown — the System
+   User does not appear there.
+
+The System User pages in Business Suite are sometimes navigated by
+`?business_id=...&selected_user_id=...` URLs. If the URL does not load
+the correct page, use the left sidebar navigation instead:
+**Rendszerfelhasználók** → click the user's name.
+
+### `subscribed_apps` — GET vs POST
+
+- `GET /{page-id}/subscribed_apps` — lists apps the Page is subscribed to.
+- `POST /{page-id}/subscribed_apps?subscribed_fields=feed,mention` —
+  subscribes the App to the Page's fields. Returns `{"success": true}`.
+
+The Graph API Explorer's URL for POST is constructed as:
+
+```
+https://developers.facebook.com/tools/explorer/?method=POST&path=1287488901121523%2Fsubscribed_apps&version=v26.0&subscribed_fields=feed%2Cmention
+```
+
+Setting the method to POST and clearing the URL query is often faster
+than using the UI dropdowns.
 
 ---
 

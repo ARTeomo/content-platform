@@ -87,6 +87,15 @@ export async function metaWebhookRoutes(
     const externalObjectId = envelope.entry[0]?.id ?? 'unknown';
     const field = envelope.entry[0]?.changes[0]?.field;
 
+    // Resolve the destination from the Meta Page ID (`entry[0].id`).
+    // The Meta test button sends `"0"`, real events send the numeric Page ID.
+    const [destinationRow] = await client.sql<{ id: string }[]>`
+      SELECT id FROM destinations
+      WHERE type = 'META' AND external_id = ${externalObjectId}
+      LIMIT 1
+    `;
+    const destinationId = destinationRow?.id ?? null;
+
     try {
       await txManager.run(async (tx) => {
         const result = await eventsRepo.insertIdempotent(tx, {
@@ -97,6 +106,7 @@ export async function metaWebhookRoutes(
           rawPayload: envelope as unknown as Record<string, unknown>,
           rawBodyHash,
           ...(field !== undefined && { field }),
+          ...(destinationId !== null && { destinationId }),
         });
 
         if (result.inserted) {

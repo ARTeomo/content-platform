@@ -17,6 +17,13 @@ export type {
   ReconcilePullResult,
 } from './meta-response-reconciler.js';
 
+export { MetaPublicationReconciler } from './meta-publication-reconciler.js';
+export type {
+  MetaPublicationReconcilerDeps,
+  ReconcilePublicationInput,
+  ReconcilePublicationResult,
+} from './meta-publication-reconciler.js';
+
 export { NoopMetaRateLimiter } from './meta-rate-limiter.js';
 
 export type {

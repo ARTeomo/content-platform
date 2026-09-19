@@ -52,3 +52,6 @@ export {
   type ReconciliationInput,
   type ReconciliationStatus,
 } from './repositories/index.js';
+
+// Destinations repository (used by webhook process + interaction response)
+export { DestinationsRepository } from './repositories/index.js';

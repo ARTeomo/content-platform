@@ -69,6 +69,28 @@ export class InteractionResponsesRepository {
     return row;
   }
 
+  /**
+   * Push-reconciliation lookup: when the platform's own reply reappears
+   * as a feed webhook, the incoming `external_interaction_id` equals the
+   * `external_response_id` we stored on the response.
+   */
+  async findByDestinationAndExternalResponseId(
+    destinationId: string,
+    externalResponseId: string,
+  ): Promise<InteractionResponseRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(interactionResponses)
+      .where(
+        and(
+          eq(interactionResponses.destinationId, destinationId),
+          eq(interactionResponses.externalResponseId, externalResponseId),
+        ),
+      )
+      .limit(1);
+    return row;
+  }
+
   async updateStatus(
     tx: Transaction,
     id: string,
@@ -89,7 +111,12 @@ export class InteractionResponsesRepository {
     const rows = await tx
       .update(interactionResponses)
       .set({ status: 'IN_PROGRESS', updatedAt: new Date() })
-      .where(and(eq(interactionResponses.id, id), inArray(interactionResponses.status, expected)))
+      .where(
+        and(
+          eq(interactionResponses.id, id),
+          inArray(interactionResponses.status, expected),
+        ),
+      )
       .returning();
     return rows[0];
   }

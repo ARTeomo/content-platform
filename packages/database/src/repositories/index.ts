@@ -65,3 +65,5 @@ export {
   type ReconciliationInput,
   type ReconciliationStatus,
 } from './interaction-response-reconciliations-repository.js';
+
+export { DestinationsRepository } from './destinations-repository.js';

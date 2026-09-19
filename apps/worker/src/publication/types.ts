@@ -1,5 +1,5 @@
 /**
- * Types for the content.publish worker and the ContentPublishService.
+ * Types for the content.publish and publication.reconcile workers.
  */
 
 export interface ContentPublishJobData {
@@ -52,3 +52,24 @@ export interface PublicationContext {
   imageResolvedUrl: string | null;
   imageSourceUrl: string | null;
 }
+
+export interface PublicationReconcileJobData {
+  publicationId: string;
+}
+
+export type ReconcileOutcome =
+  | {
+      status: 'PUBLISHED';
+      externalPostId: string;
+    }
+  | {
+      status: 'RETRY_ELIGIBLE';
+    }
+  | {
+      status: 'STILL_UNKNOWN';
+      reason: string;
+    }
+  | {
+      status: 'SKIPPED';
+      reason: string;
+    };

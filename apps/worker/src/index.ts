@@ -7,6 +7,7 @@ import {
   InteractionResponsesRepository,
   OutboxRepository,
   PublicationAttemptsRepository,
+  PublicationReconciliationsRepository,
   PublicationsRepository,
   TransactionManager,
   WebhookDeliveriesRepository,
@@ -14,6 +15,7 @@ import {
 } from '@content-platform/database';
 import {
   MetaInteractionAdapter,
+  MetaPublicationReconciler,
   MetaPublisherAdapter,
   MetaResponseReconciler,
   NoopMetaRateLimiter,
@@ -44,14 +46,12 @@ import {
 import {
   ContentPublishService,
   ContentPublishWorker,
+  PublicationReconcileService,
+  PublicationReconcileWorker,
   type ContentPublishJobData,
+  type PublicationReconcileJobData,
 } from './publication/index.js';
 
-/**
- * Default interaction response configuration. Real values are loaded
- * from `system_config` in a later slice; until then the empty rule set
- * means every inbound comment defers to human moderation (fail-closed).
- */
 const DEFAULT_INTERACTION_RESPONSE_CONFIG: InteractionResponseConfig = {
   rules: [],
   maxResponsesPerHour: 20,
@@ -79,6 +79,7 @@ async function main(): Promise<void> {
   const interactionsRepo = new ExternalInteractionsRepository(db.db);
   const publicationsRepo = new PublicationsRepository(db.db);
   const publicationAttemptsRepo = new PublicationAttemptsRepository(db.db);
+  const publicationReconciliationsRepo = new PublicationReconciliationsRepository(db.db);
   const destinationsRepo = new DestinationsRepository(db.db);
   const responsesRepo = new InteractionResponsesRepository(db.db);
   const attemptsRepo = new InteractionResponseAttemptsRepository(db.db);
@@ -163,7 +164,12 @@ async function main(): Promise<void> {
     { apiVersion: config.metaGraphApiVersion },
   );
 
-  const metaReconciler = new MetaResponseReconciler({
+  const metaResponseReconciler = new MetaResponseReconciler({
+    graphGetClient: metaGraphBridge,
+    getAccessToken,
+  });
+
+  const metaPublicationReconciler = new MetaPublicationReconciler({
     graphGetClient: metaGraphBridge,
     getAccessToken,
   });
@@ -200,7 +206,7 @@ async function main(): Promise<void> {
     reconciliationsRepo,
     interactionsRepo,
     outboxRepo,
-    reconciler: metaReconciler,
+    reconciler: metaResponseReconciler,
   });
 
   const webhookRespondReconcileWorker = new WebhookRespondReconcileWorker({
@@ -247,6 +253,35 @@ async function main(): Promise<void> {
     service: contentPublishService,
   });
 
+  // ---- publication.reconcile wiring ----
+
+  const publicationReconcileService = new PublicationReconcileService({
+    db: db.db,
+    txManager,
+    publicationsRepo,
+    attemptsRepo: publicationAttemptsRepo,
+    reconciliationsRepo: publicationReconciliationsRepo,
+    reconciler: metaPublicationReconciler,
+  });
+
+  const publicationReconcileWorker = new PublicationReconcileWorker({
+    consumerFactory: (options) =>
+      new BullMqJobConsumer<PublicationReconcileJobData>({
+        redisUrl: config.redisUrl,
+        queueName: options.queueName,
+        processor: options.processor,
+        onFailed: (jobId, err) => {
+          console.error(
+            `[publication.reconcile] job ${jobId ?? '<unknown>'} failed: ${err.message}`,
+          );
+        },
+        onError: (err) => {
+          console.error(`[publication.reconcile] consumer error: ${err.message}`);
+        },
+      }),
+    service: publicationReconcileService,
+  });
+
   // ---- shutdown ----
 
   let shuttingDown = false;
@@ -254,6 +289,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[worker] received ${signal}, shutting down`);
+    await publicationReconcileWorker.close();
     await contentPublishWorker.close();
     await webhookRespondReconcileWorker.close();
     await webhookRespondWorker.close();
@@ -269,7 +305,7 @@ async function main(): Promise<void> {
 
   if (!config.metaPageAccessToken) {
     console.warn(
-      '[worker] META_PAGE_ACCESS_TOKEN is not set — webhook.respond and content.publish will fail with AUTHENTICATION_ERROR',
+      '[worker] META_PAGE_ACCESS_TOKEN is not set — webhook.respond, content.publish, and publication.reconcile will fail with AUTHENTICATION_ERROR',
     );
   }
 

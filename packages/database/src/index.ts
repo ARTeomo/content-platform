@@ -37,3 +37,18 @@ export {
   type CredentialStatus,
   PublicationsRepository,
 } from './repositories/index.js';
+
+// Phase 18b — interaction response repositories
+export {
+  InteractionResponsesRepository,
+  type InteractionResponseInput,
+  type InteractionResponseStatus,
+  InteractionResponseAttemptsRepository,
+  type AttemptStatus,
+  InteractionModerationActionsRepository,
+  type ModerationAction,
+  type ModerationActionInput,
+  InteractionResponseReconciliationsRepository,
+  type ReconciliationInput,
+  type ReconciliationStatus,
+} from './repositories/index.js';

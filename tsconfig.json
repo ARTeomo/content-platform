@@ -4,6 +4,7 @@
     { "path": "./packages/database" },
     { "path": "./packages/authentication" },
     { "path": "./packages/interaction-response" },
+    { "path": "./packages/publishers" },
     { "path": "./apps/worker" },
     { "path": "./apps/api" }
   ]

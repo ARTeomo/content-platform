@@ -12,6 +12,17 @@ export {
 export * as schema from './schema/index.js';
 export { TransactionManager, type Transaction } from './transaction/index.js';
 
+/**
+ * Re-export the Drizzle SQL template tag.
+ *
+ * Consumers that need to build raw queries (e.g. the worker's
+ * content-publish-service) can import `sql` from this package instead
+ * of depending on `drizzle-orm` directly. This keeps the peer-resolution
+ * boundary at the database package and avoids requiring `drizzle-orm` and
+ * `postgres` to be declared by every consumer.
+ */
+export { sql } from 'drizzle-orm';
+
 // Repositories (single re-export from the repository barrel)
 
 export {

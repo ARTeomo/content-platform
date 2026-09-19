@@ -8,6 +8,18 @@ export {
   type WebhookRespondWorkerDeps,
   type RespondConsumerLike,
 } from './webhook-respond-worker.js';
+export { WebhookRespondReconcileService } from './webhook-respond-reconcile-service.js';
+export type {
+  WebhookRespondReconcileServiceDeps,
+  ReconcileOutcome,
+} from './webhook-respond-reconcile-service.js';
+export {
+  WebhookRespondReconcileWorker,
+  WEBHOOK_RESPOND_RECONCILE_QUEUE,
+  type WebhookRespondReconcileJobData,
+  type WebhookRespondReconcileWorkerDeps,
+  type ReconcileConsumerLike,
+} from './webhook-respond-reconcile-worker.js';
 export { MetaGraphBridge, type MetaGraphBridgeOptions } from './meta-graph-bridge.js';
 export type {
   DecideOutcome,

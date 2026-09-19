@@ -1,12 +1,3 @@
-/**
- * Types for the Meta interaction adapter.
- *
- * The adapter is deliberately decoupled from the concrete Graph client
- * and credential service implementations via the GraphClient and
- * getAccessToken function. This keeps the adapter testable in isolation
- * and independent of the authentication package's internal API.
- */
-
 export type MetaErrorCategory =
   | 'AUTHENTICATION_ERROR'
   | 'AUTHORIZATION_ERROR'
@@ -16,6 +7,8 @@ export type MetaErrorCategory =
   | 'INVALID_REQUEST'
   | 'CONTENT_REJECTED'
   | 'UNKNOWN';
+
+// ---------- POST ----------
 
 export interface GraphPostInput {
   path: string;
@@ -33,9 +26,40 @@ export type GraphPostResult =
       retryAfterSeconds?: number;
     };
 
-export interface GraphClient {
+export interface GraphPostClient {
   post(input: GraphPostInput): Promise<GraphPostResult>;
 }
+
+/**
+ * Backward-compatible alias. The MetaInteractionAdapter consumes only
+ * the POST capability; the alias exists so the adapter's dep name and
+ * the existing tests stay stable.
+ */
+export type GraphClient = GraphPostClient;
+
+// ---------- GET ----------
+
+export interface GraphGetInput {
+  path: string;
+  params?: Record<string, string>;
+  accessToken: string;
+}
+
+export type GraphGetResult =
+  | { ok: true; data: Record<string, unknown> }
+  | {
+      ok: false;
+      category: MetaErrorCategory;
+      message: string;
+      httpStatus?: number;
+      retryAfterSeconds?: number;
+    };
+
+export interface GraphGetClient {
+  get(input: GraphGetInput): Promise<GraphGetResult>;
+}
+
+// ---------- Rate limiting ----------
 
 export interface RateLimitDecision {
   allowed: boolean;
@@ -46,6 +70,8 @@ export interface RateLimitDecision {
 export interface MetaRateLimiter {
   checkEngagement(destinationId: string): Promise<RateLimitDecision>;
 }
+
+// ---------- Reply ----------
 
 export interface ReplyInput {
   destinationId: string;

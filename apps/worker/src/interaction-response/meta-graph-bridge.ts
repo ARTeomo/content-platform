@@ -1,18 +1,17 @@
 import type {
-  GraphClient,
+  GraphGetClient,
+  GraphGetInput,
+  GraphGetResult,
+  GraphPostClient,
   GraphPostInput,
   GraphPostResult,
   MetaErrorCategory,
 } from '@content-platform/publishers';
 
 export interface MetaGraphBridgeOptions {
-  /** Graph API version, e.g. `v21.0`. */
   apiVersion: string;
-  /** Default `https://graph.facebook.com`. */
   baseUrl?: string;
-  /** Request timeout in milliseconds. Default 15_000. */
   timeoutMs?: number;
-  /** Override fetch for testing. Defaults to `globalThis.fetch`. */
   fetchImpl?: typeof fetch;
 }
 
@@ -22,19 +21,30 @@ interface ExtractedError {
   subcode: number | undefined;
 }
 
+type ErrorResult = {
+  ok: false;
+  category: MetaErrorCategory;
+  message: string;
+  httpStatus?: number;
+  retryAfterSeconds?: number;
+};
+
+interface RawResponse {
+  ok: boolean;
+  status: number;
+  headers: Headers;
+  payload: unknown;
+  bodyText: string;
+}
+
 /**
  * GraphClient implementation for the publishers package.
  *
  * Talks to the Meta Graph API over HTTPS using Node's global fetch.
  * Encapsulates HTTP, timeout, and error classification. Never throws:
- * every failure is mapped to a GraphPostResult with `ok: false`.
- *
- * The classification logic below mirrors the Meta error categories
- * used by the publishers package. It is intentionally self-contained so
- * this bridge has no dependency on the authentication package's error
- * mapper (which is focused on the credential-flow endpoints).
+ * every failure is mapped to a result with `ok: false`.
  */
-export class MetaGraphBridge implements GraphClient {
+export class MetaGraphBridge implements GraphPostClient, GraphGetClient {
   private readonly apiVersion: string;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -48,32 +58,98 @@ export class MetaGraphBridge implements GraphClient {
   }
 
   async post(input: GraphPostInput): Promise<GraphPostResult> {
-    // If the caller supplies a fully-qualified path (e.g. "v21.0/123/comments"),
-    // use it as-is. Otherwise prepend the configured version.
-    const path = input.path.startsWith('v') ? input.path : `${this.apiVersion}/${input.path}`;
-    const url = new URL(`${this.baseUrl}/${path}`);
-    url.searchParams.set('access_token', input.accessToken);
+    const url = this.buildUrl(input.path, { access_token: input.accessToken });
+    const raw = await this.requestRaw({
+      method: 'POST',
+      url,
+      body: input.body,
+    });
 
+    if (raw.kind === 'network-error') {
+      return { ok: false, category: 'NETWORK_ERROR', message: raw.message };
+    }
+    if (raw.response.ok) {
+      if (
+        raw.response.payload &&
+        typeof raw.response.payload === 'object' &&
+        !Array.isArray(raw.response.payload)
+      ) {
+        return { ok: true, data: raw.response.payload as Record<string, unknown> };
+      }
+      return {
+        ok: false,
+        category: 'UNKNOWN',
+        message: 'graph API returned success with no JSON object body',
+        httpStatus: raw.response.status,
+      };
+    }
+    return this.classifyError(raw.response);
+  }
+
+  async get(input: GraphGetInput): Promise<GraphGetResult> {
+    const params: Record<string, string> = { access_token: input.accessToken };
+    if (input.params) {
+      for (const [k, v] of Object.entries(input.params)) {
+        params[k] = v;
+      }
+    }
+    const url = this.buildUrl(input.path, params);
+    const raw = await this.requestRaw({ method: 'GET', url });
+
+    if (raw.kind === 'network-error') {
+      return { ok: false, category: 'NETWORK_ERROR', message: raw.message };
+    }
+    if (raw.response.ok) {
+      if (
+        raw.response.payload &&
+        typeof raw.response.payload === 'object' &&
+        !Array.isArray(raw.response.payload)
+      ) {
+        return { ok: true, data: raw.response.payload as Record<string, unknown> };
+      }
+      return {
+        ok: false,
+        category: 'UNKNOWN',
+        message: 'graph API returned success with no JSON object body',
+        httpStatus: raw.response.status,
+      };
+    }
+    return this.classifyError(raw.response);
+  }
+
+  private buildUrl(path: string, params: Record<string, string>): URL {
+    const fullPath = path.startsWith('v') ? path : `${this.apiVersion}/${path}`;
+    const url = new URL(`${this.baseUrl}/${fullPath}`);
+    for (const [k, v] of Object.entries(params)) {
+      url.searchParams.set(k, v);
+    }
+    return url;
+  }
+
+  private async requestRaw(args: {
+    method: 'GET' | 'POST';
+    url: URL;
+    body?: unknown;
+  }): Promise<{ kind: 'ok'; response: RawResponse } | { kind: 'network-error'; message: string }> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     let response: Response;
     let bodyText: string;
     try {
-      response = await this.fetchImpl(url.toString(), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(input.body),
+      const init: RequestInit = {
+        method: args.method,
         signal: controller.signal,
-      });
+      };
+      if (args.body !== undefined) {
+        init.headers = { 'content-type': 'application/json' };
+        init.body = JSON.stringify(args.body);
+      }
+      response = await this.fetchImpl(args.url.toString(), init);
       bodyText = await response.text();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return {
-        ok: false,
-        category: 'NETWORK_ERROR',
-        message: `network error: ${message}`,
-      };
+      return { kind: 'network-error', message: `network error: ${message}` };
     } finally {
       clearTimeout(timeout);
     }
@@ -87,31 +163,27 @@ export class MetaGraphBridge implements GraphClient {
       }
     }
 
-    if (response.ok) {
-      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-        return { ok: true, data: payload as Record<string, unknown> };
-      }
-      return {
-        ok: false,
-        category: 'UNKNOWN',
-        message: 'graph API returned success with no JSON object body',
-        httpStatus: response.status,
-      };
-    }
-
-    return this.classifyError(response, payload, bodyText);
+    return {
+      kind: 'ok',
+      response: {
+        ok: response.ok,
+        status: response.status,
+        headers: response.headers,
+        payload,
+        bodyText,
+      },
+    };
   }
 
-  private classifyError(response: Response, payload: unknown, bodyText: string): GraphPostResult {
+  private classifyError(response: RawResponse): ErrorResult {
     const status = response.status;
-    const { message, code, subcode } = extractMetaError(payload);
-    const errorMessage = message ?? `HTTP ${status}: ${bodyText.slice(0, 200)}`;
+    const { message, code, subcode } = extractMetaError(response.payload);
+    const errorMessage = message ?? `HTTP ${status}: ${response.bodyText.slice(0, 200)}`;
 
     const retryAfterHeader = response.headers.get('retry-after');
     const parsedRetry = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : NaN;
     const retryAfterSeconds = Number.isFinite(parsedRetry) ? parsedRetry : undefined;
 
-    // 5xx → transient.
     if (status >= 500 && status < 600) {
       return {
         ok: false,
@@ -122,7 +194,6 @@ export class MetaGraphBridge implements GraphClient {
       };
     }
 
-    // 429 or Graph rate-limit codes (4, 32, 613).
     if (status === 429 || code === 4 || code === 32 || code === 613) {
       return {
         ok: false,
@@ -133,7 +204,6 @@ export class MetaGraphBridge implements GraphClient {
       };
     }
 
-    // 401 or Graph OAuth code 190.
     if (status === 401 || code === 190) {
       return {
         ok: false,
@@ -143,7 +213,6 @@ export class MetaGraphBridge implements GraphClient {
       };
     }
 
-    // 403 or Graph permission codes (10, 200).
     if (status === 403 || code === 10 || code === 200) {
       return {
         ok: false,
@@ -153,7 +222,6 @@ export class MetaGraphBridge implements GraphClient {
       };
     }
 
-    // 400 with a content-rejection subcode.
     if (status === 400) {
       if (subcode === 1410007 || subcode === 1346003) {
         return {
@@ -196,7 +264,3 @@ function extractMetaError(payload: unknown): ExtractedError {
     subcode: typeof e.error_subcode === 'number' ? e.error_subcode : undefined,
   };
 }
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _typeCheck: MetaErrorCategory = 'UNKNOWN';
-void _typeCheck;

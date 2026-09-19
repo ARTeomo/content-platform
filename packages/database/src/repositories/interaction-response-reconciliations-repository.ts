@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { interactionResponseReconciliations } from '../schema/interaction/interaction-response-reconciliations.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -15,13 +15,6 @@ export interface ReconciliationInput {
   details?: Record<string, unknown>;
 }
 
-/**
- * Repository for interaction response reconciliation history.
- *
- * Reconciliation may proceed via push (the platform's own response
- * reappearing as a feed webhook) or via pull (a scheduled worker
- * querying the provider).
- */
 export class InteractionResponseReconciliationsRepository {
   constructor(private readonly db: Database) {}
 
@@ -59,5 +52,17 @@ export class InteractionResponseReconciliationsRepository {
       .orderBy(desc(interactionResponseReconciliations.createdAt))
       .limit(1);
     return row;
+  }
+
+  /**
+   * Counts reconciliation records for a response. Used to produce a
+   * deterministic, monotonic job id suffix for retry enqueues.
+   */
+  async countForResponse(responseId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`COUNT(*)::int` })
+      .from(interactionResponseReconciliations)
+      .where(eq(interactionResponseReconciliations.responseId, responseId));
+    return row?.count ?? 0;
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InteractionResponsesRepository,
+  OutboxRepository,
   Transaction,
   TransactionManager,
 } from '@content-platform/database';
@@ -11,8 +12,6 @@ import type {
   InteractionSnapshot,
   TemplateMap,
 } from './types.js';
-
-// ---------- fakes ----------
 
 interface FakeResponseRow {
   id: string;
@@ -32,31 +31,36 @@ interface FakeResponseRow {
 function makeTxManager(): TransactionManager {
   return {
     async run<T>(fn: (tx: Transaction) => Promise<T>): Promise<T> {
-      const fakeTx = {} as Transaction;
-      return await fn(fakeTx);
+      return await fn({} as Transaction);
     },
   } as unknown as TransactionManager;
 }
 
-interface FakeRepo {
+interface FakeEnv {
   repo: InteractionResponsesRepository;
+  outbox: OutboxRepository;
   rows: FakeResponseRow[];
+  enqueued: { queueName: string; jobId: string }[];
   recentCount: number;
 }
 
-function makeRepo(): FakeRepo {
+function makeEnv(): FakeEnv {
   const rows: FakeResponseRow[] = [];
-  const state: FakeRepo = {
+  const enqueued: { queueName: string; jobId: string }[] = [];
+  const state: FakeEnv = {
     rows,
+    enqueued,
     recentCount: 0,
     repo: undefined as unknown as InteractionResponsesRepository,
+    outbox: undefined as unknown as OutboxRepository,
   };
   const now = new Date();
+
   const repo = {
     async findByInteractionId(interactionId: string): Promise<FakeResponseRow | undefined> {
       return rows.find((r) => r.interactionId === interactionId);
     },
-    async countRecentByDestination(_destinationId: string, _since: Date): Promise<number> {
+    async countRecentByDestination(): Promise<number> {
       return state.recentCount;
     },
     async create(
@@ -87,7 +91,15 @@ function makeRepo(): FakeRepo {
       return row;
     },
   } as unknown as InteractionResponsesRepository;
+
+  const outbox = {
+    async enqueue(_tx: unknown, job: { queueName: string; jobId: string }): Promise<void> {
+      enqueued.push({ queueName: job.queueName, jobId: job.jobId });
+    },
+  } as unknown as OutboxRepository;
+
   state.repo = repo;
+  state.outbox = outbox;
   return state;
 }
 
@@ -119,14 +131,13 @@ const templates: TemplateMap = {
   generic: 'Hello {{actor_display_name}}!',
 };
 
-// ---------- tests ----------
-
 describe('InteractionResponseService.decide', () => {
   it('returns IGNORED for reactions', async () => {
-    const { repo } = makeRepo();
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const outcome = await service.decide({
@@ -137,13 +148,15 @@ describe('InteractionResponseService.decide', () => {
       templates,
     });
     expect(outcome.kind).toBe('IGNORED');
+    expect(env.enqueued).toEqual([]);
   });
 
   it('returns NOTIFICATION_ONLY for mentions', async () => {
-    const { repo } = makeRepo();
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const outcome = await service.decide({
@@ -154,13 +167,15 @@ describe('InteractionResponseService.decide', () => {
       templates,
     });
     expect(outcome.kind).toBe('NOTIFICATION_ONLY');
+    expect(env.enqueued).toEqual([]);
   });
 
-  it('creates a MODERATION_REQUIRED row when no rule matches', async () => {
-    const { repo, rows } = makeRepo();
+  it('creates a MODERATION_REQUIRED row when no rule matches (no outbox job)', async () => {
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const outcome = await service.decide({
@@ -171,15 +186,17 @@ describe('InteractionResponseService.decide', () => {
       templates,
     });
     expect(outcome.kind).toBe('MODERATION_REQUIRED');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe('MODERATION_REQUIRED');
+    expect(env.rows).toHaveLength(1);
+    expect(env.rows[0]!.status).toBe('MODERATION_REQUIRED');
+    expect(env.enqueued).toEqual([]);
   });
 
-  it('creates an AUTO_RESPOND row when a rule matches and the template renders', async () => {
-    const { repo, rows } = makeRepo();
+  it('creates an AUTO_RESPOND row and enqueues a webhook.respond job', async () => {
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const outcome = await service.decide({
@@ -206,16 +223,20 @@ describe('InteractionResponseService.decide', () => {
       expect(outcome.templateId).toBe('thanks-template');
       expect(outcome.body).toBe('Hi Alice, thanks for your comment!');
     }
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe('AUTO_RESPOND');
-    expect(rows[0]!.body).toBe('Hi Alice, thanks for your comment!');
+    expect(env.rows).toHaveLength(1);
+    expect(env.rows[0]!.status).toBe('AUTO_RESPOND');
+    expect(env.rows[0]!.body).toBe('Hi Alice, thanks for your comment!');
+    expect(env.enqueued).toHaveLength(1);
+    expect(env.enqueued[0]!.queueName).toBe('webhook.respond');
+    expect(env.enqueued[0]!.jobId).toBe('webhook.respond:resp-1');
   });
 
   it('defers to moderation when the template has a missing placeholder', async () => {
-    const { repo, rows } = makeRepo();
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const outcome = await service.decide({
@@ -238,15 +259,17 @@ describe('InteractionResponseService.decide', () => {
       templates,
     });
     expect(outcome.kind).toBe('MODERATION_REQUIRED');
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe('MODERATION_REQUIRED');
+    expect(env.rows).toHaveLength(1);
+    expect(env.rows[0]!.status).toBe('MODERATION_REQUIRED');
+    expect(env.enqueued).toEqual([]);
   });
 
   it('defers to moderation when the template is missing from the map', async () => {
-    const { repo, rows } = makeRepo();
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const outcome = await service.decide({
@@ -269,14 +292,16 @@ describe('InteractionResponseService.decide', () => {
       templates,
     });
     expect(outcome.kind).toBe('MODERATION_REQUIRED');
-    expect(rows).toHaveLength(1);
+    expect(env.rows).toHaveLength(1);
+    expect(env.enqueued).toEqual([]);
   });
 
   it('is idempotent: second decide call reuses the existing response', async () => {
-    const { repo, rows } = makeRepo();
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const args = {
@@ -293,14 +318,16 @@ describe('InteractionResponseService.decide', () => {
     if (first.kind === 'MODERATION_REQUIRED' && second.kind === 'MODERATION_REQUIRED') {
       expect(second.responseId).toBe(first.responseId);
     }
-    expect(rows).toHaveLength(1);
+    expect(env.rows).toHaveLength(1);
+    expect(env.enqueued).toEqual([]);
   });
 
   it('produces a deterministic requestPayloadHash', () => {
-    const { repo } = makeRepo();
+    const env = makeEnv();
     const service = new InteractionResponseService({
       txManager: makeTxManager(),
-      responsesRepo: repo,
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
     });
     const h1 = service.requestPayloadHash('hello');
     const h2 = service.requestPayloadHash('hello');

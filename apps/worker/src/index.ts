@@ -1,5 +1,6 @@
 import {
   createDatabaseClient,
+  DestinationsRepository,
   ExternalInteractionsRepository,
   InteractionResponseAttemptsRepository,
   InteractionResponseReconciliationsRepository,
@@ -27,14 +28,30 @@ import {
   type WebhookProcessJobData,
 } from './webhook/index.js';
 import {
+  InteractionResponseService,
   MetaGraphBridge,
   WebhookRespondReconcileService,
   WebhookRespondReconcileWorker,
   WebhookRespondService,
   WebhookRespondWorker,
+  type InteractionResponseConfig,
+  type TemplateMap,
   type WebhookRespondJobData,
   type WebhookRespondReconcileJobData,
 } from './interaction-response/index.js';
+
+/**
+ * Default interaction response configuration. Real values are loaded
+ * from `system_config` in a later slice; until then the empty rule set
+ * means every inbound comment defers to human moderation (fail-closed).
+ */
+const DEFAULT_INTERACTION_RESPONSE_CONFIG: InteractionResponseConfig = {
+  rules: [],
+  maxResponsesPerHour: 20,
+  minIntervalSeconds: 30,
+};
+
+const DEFAULT_TEMPLATES: TemplateMap = {};
 
 async function main(): Promise<void> {
   const config = loadWorkerConfig();
@@ -47,8 +64,29 @@ async function main(): Promise<void> {
 
   const queue = new BullMqJobQueue({ redisUrl: config.redisUrl });
 
+  // ---- shared repositories ----
+
   const outboxRepo = new OutboxRepository(db.db);
+  const eventsRepo = new WebhookEventsRepository(db.db);
+  const deliveriesRepo = new WebhookDeliveriesRepository(db.db);
+  const interactionsRepo = new ExternalInteractionsRepository(db.db);
+  const publicationsRepo = new PublicationsRepository(db.db);
+  const destinationsRepo = new DestinationsRepository(db.db);
+  const responsesRepo = new InteractionResponsesRepository(db.db);
+  const attemptsRepo = new InteractionResponseAttemptsRepository(db.db);
+  const reconciliationsRepo = new InteractionResponseReconciliationsRepository(db.db);
+
+  // ---- outbox dispatcher ----
+
   const dispatcher = new OutboxDispatcher({ outboxRepo, queue, config });
+
+  // ---- interaction response service (policy + template + outbox enqueue) ----
+
+  const interactionResponseService = new InteractionResponseService({
+    txManager,
+    responsesRepo,
+    outboxRepo,
+  });
 
   // ---- webhook.process wiring ----
 
@@ -58,11 +96,16 @@ async function main(): Promise<void> {
 
   const webhookProcessService = new WebhookProcessService({
     txManager,
-    eventsRepo: new WebhookEventsRepository(db.db),
-    deliveriesRepo: new WebhookDeliveriesRepository(db.db),
-    interactionsRepo: new ExternalInteractionsRepository(db.db),
-    publicationsRepo: new PublicationsRepository(db.db),
+    eventsRepo,
+    deliveriesRepo,
+    interactionsRepo,
+    publicationsRepo,
+    destinationsRepo,
+    responsesRepo,
     extractorRegistry,
+    interactionResponseService,
+    interactionResponseConfig: DEFAULT_INTERACTION_RESPONSE_CONFIG,
+    templates: DEFAULT_TEMPLATES,
   });
 
   const webhookProcessWorker = new WebhookProcessWorker({
@@ -82,11 +125,6 @@ async function main(): Promise<void> {
   });
 
   // ---- webhook.respond + reconcile wiring ----
-
-  const responsesRepo = new InteractionResponsesRepository(db.db);
-  const attemptsRepo = new InteractionResponseAttemptsRepository(db.db);
-  const reconciliationsRepo = new InteractionResponseReconciliationsRepository(db.db);
-  const interactionsRepo = new ExternalInteractionsRepository(db.db);
 
   const metaGraphBridge = new MetaGraphBridge({
     apiVersion: config.metaGraphApiVersion,

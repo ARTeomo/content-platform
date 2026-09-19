@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   InteractionResponsesRepository,
+  OutboxRepository,
   TransactionManager,
 } from '@content-platform/database';
 import {
@@ -22,24 +23,12 @@ import { buildPolicyInput } from './types.js';
 export interface InteractionResponseServiceDeps {
   txManager: TransactionManager;
   responsesRepo: InteractionResponsesRepository;
+  outboxRepo: OutboxRepository;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 
-/**
- * Domain service that decides whether an inbound interaction produces an
- * outbound response, and in which state the response record is stored.
- *
- * The service does NOT send the response. Sending is the responsibility
- * of the `webhook.respond` worker (a later slice).
- *
- * The service is deterministic given the same inputs. It does not call
- * external services. Its only I/O is:
- *   - a count query for the rate limit,
- *   - an idempotency lookup,
- *   - a single insert inside a transaction when a response is created.
- */
 export class InteractionResponseService {
   private readonly deps: InteractionResponseServiceDeps;
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -51,11 +40,6 @@ export class InteractionResponseService {
     this.renderer = new TemplateRenderer();
   }
 
-  /**
-   * The main entry point. Idempotent: a second call for the same
-   * interaction returns the outcome derived from the existing response
-   * record (or falls through to the same decision if no record exists).
-   */
   async decide(args: {
     interaction: InteractionSnapshot;
     destination: DestinationSnapshot;
@@ -65,7 +49,6 @@ export class InteractionResponseService {
   }): Promise<DecideOutcome> {
     const { interaction, destination, config, templates, publication } = args;
 
-    // 1. Idempotency: an existing response short-circuits the decision.
     const existing = await this.deps.responsesRepo.findByInteractionId(interaction.id);
     if (existing) {
       this.log.info(
@@ -74,16 +57,12 @@ export class InteractionResponseService {
       return this.outcomeFromExisting(existing);
     }
 
-    // 2. Rate limit: count of responses sent to this destination in the
-    //    last hour. This is a DB query today; a Redis-backed counter will
-    //    replace it in a later slice.
     const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS);
     const recentResponseCount = await this.deps.responsesRepo.countRecentByDestination(
       destination.id,
       since,
     );
 
-    // 3. Policy decision.
     const engine = new DefaultPolicyEngine({ rules: config.rules });
     const decision = engine.decide(
       buildPolicyInput({
@@ -94,7 +73,6 @@ export class InteractionResponseService {
       }),
     );
 
-    // 4. Dispatch on the decision.
     if (decision.action === 'IGNORE') {
       this.log.info(
         `[interaction-response] interaction ${interaction.id} ignored: ${decision.reason}`,
@@ -116,18 +94,11 @@ export class InteractionResponseService {
         status: 'MODERATION_REQUIRED',
         ...(decision.templateId !== undefined && { templateId: decision.templateId }),
       });
-      return {
-        kind: 'MODERATION_REQUIRED',
-        responseId,
-        reason: decision.reason,
-      };
+      return { kind: 'MODERATION_REQUIRED', responseId, reason: decision.reason };
     }
 
     // AUTO_RESPOND path.
     if (!decision.templateId) {
-      // Defensive: the current engine forces MODERATION_REQUIRED if a
-      // matching rule lacks a templateId, but a future engine version
-      // might relax this. Fail-closed.
       const responseId = await this.createResponse({
         interactionId: interaction.id,
         destinationId: destination.id,
@@ -190,6 +161,7 @@ export class InteractionResponseService {
       status: 'AUTO_RESPOND',
       templateId: decision.templateId,
       body,
+      enqueueRespondJob: true,
     });
 
     return {
@@ -200,10 +172,6 @@ export class InteractionResponseService {
     };
   }
 
-  /**
-   * Canonical hash for a response body. Used as `requestPayloadHash` on
-   * the attempt record and passed to the adapter.
-   */
   requestPayloadHash(body: string): string {
     return `sha256:${createHash('sha256').update(body, 'utf8').digest('hex')}`;
   }
@@ -266,16 +234,27 @@ export class InteractionResponseService {
     status: 'AUTO_RESPOND' | 'MODERATION_REQUIRED' | 'DRAFT';
     templateId?: string;
     body?: string;
+    enqueueRespondJob?: boolean;
   }): Promise<string> {
-    const row = await this.deps.txManager.run(async (tx) =>
-      this.deps.responsesRepo.create(tx, {
+    const row = await this.deps.txManager.run(async (tx) => {
+      const created = await this.deps.responsesRepo.create(tx, {
         interactionId: input.interactionId,
         destinationId: input.destinationId,
         status: input.status,
         ...(input.templateId !== undefined && { templateId: input.templateId }),
         ...(input.body !== undefined && { body: input.body }),
-      }),
-    );
+      });
+
+      if (input.enqueueRespondJob === true) {
+        await this.deps.outboxRepo.enqueue(tx, {
+          queueName: 'webhook.respond',
+          jobId: `webhook.respond:${created.id}`,
+          payload: { responseId: created.id },
+        });
+      }
+
+      return created;
+    });
     return row.id;
   }
 }

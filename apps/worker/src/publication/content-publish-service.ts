@@ -39,10 +39,17 @@ interface PublicationContextRow {
  * Orchestrates publishing a single Publication to its destination.
  *
  * State machine transitions:
- *   SCHEDULED | RETRY  →  RESERVED  →  IN_PROGRESS  →  PUBLISHED
- *                                                  ├→ RETRY
- *                                                  ├→ FAILED
- *                                                  └→ RECONCILIATION
+ *
+ *   SCHEDULED | RESERVED | RETRY  ──► IN_PROGRESS ──► PUBLISHED
+ *                                                  ├──► RETRY
+ *                                                  ├──► FAILED
+ *                                                  └──► RECONCILIATION
+ *
+ * The IN_PROGRESS transition is a single atomic UPDATE ... RETURNING
+ * guarded by the status predicate (see PublicationsRepository
+ * .claimForPublishing). If two workers race on the same publication,
+ * exactly one wins and the other returns SKIPPED without touching the
+ * external API.
  *
  * Called by the `content.publish` worker for one publication per job.
  */
@@ -62,19 +69,42 @@ export class ContentPublishService {
       return { status: 'SKIPPED', reason: 'publication not found' };
     }
 
-    // 2. Guard: only SCHEDULED and RETRY are eligible.
-    if (context.publicationStatus !== 'SCHEDULED' && context.publicationStatus !== 'RETRY') {
+    // 2. Guard: only pre-execution states are eligible.
+    //
+    //    RESERVED is the state set by the Phase 19d publication
+    //    scheduler after it claims a due SCHEDULED row and enqueues the
+    //    content.publish job. SCHEDULED remains eligible for the
+    //    system.rebuild recovery path. RETRY is the re-enqueue path
+    //    after a transient failure.
+    //
+    //    Everything else (IN_PROGRESS, PUBLISHED, FAILED, RECONCILIATION)
+    //    is either already in flight or terminal, and must not be
+    //    re-executed by this worker.
+    const eligible =
+      context.publicationStatus === 'SCHEDULED' ||
+      context.publicationStatus === 'RESERVED' ||
+      context.publicationStatus === 'RETRY';
+    if (!eligible) {
       return {
         status: 'SKIPPED',
         reason: `status is ${context.publicationStatus}`,
       };
     }
 
-    // 3. Reserve + mark IN_PROGRESS atomically (single transaction).
-    await this.deps.txManager.run(async (tx) => {
-      await this.deps.publicationsRepo.markReserved(tx, publicationId);
-      await this.deps.publicationsRepo.markInProgress(tx, publicationId);
-    });
+    // 3. Atomically claim the publication.
+    //
+    //    Single UPDATE ... RETURNING, guarded by the status predicate.
+    //    If a concurrent worker, a BullMQ retry, or a system.rebuild
+    //    re-enqueue races us, exactly one side wins and the other gets
+    //    `false`. The loser must exit here without calling the external
+    //    API — otherwise two posts would be published for the same
+    //    candidate.
+    const claimed = await this.deps.txManager.run(async (tx) =>
+      this.deps.publicationsRepo.claimForPublishing(tx, publicationId),
+    );
+    if (!claimed) {
+      return { status: 'SKIPPED', reason: 'concurrent claim lost' };
+    }
 
     // 4. Build the outbound payload.
     const message = buildMessage(context);

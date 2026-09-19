@@ -16,10 +16,12 @@ export interface PublicationCreateInput {
 /**
  * Repository for publication intent and its state machine.
  *
- * State machine: SCHEDULED → RESERVED → IN_PROGRESS → PUBLISHED
- *                                                  ├→ RETRY
- *                                                  ├→ FAILED
- *                                                  └→ RECONCILIATION
+ * State machine:
+ *
+ *   SCHEDULED ──► RESERVED ──► IN_PROGRESS ──► PUBLISHED
+ *                                                 ├──► RETRY
+ *                                                 ├──► FAILED
+ *                                                 └──► RECONCILIATION
  *
  * Unknown external outcomes are represented by RECONCILIATION and must
  * not automatically become ordinary failures.
@@ -138,6 +140,45 @@ export class PublicationsRepository {
     return row !== undefined;
   }
 
+  /**
+   * Atomically claim a publication for outbound execution.
+   *
+   * Transitions the publication to IN_PROGRESS from any of its
+   * pre-execution states:
+   *
+   *   SCHEDULED   — direct enqueue (system.rebuild recovery path)
+   *   RESERVED    — claimed by the publication scheduler (Phase 19d)
+   *   RETRY       — re-enqueue after a transient failure
+   *
+   * The claim is a single UPDATE ... RETURNING guarded by the status
+   * predicate. It returns `true` iff exactly one row was updated. A
+   * concurrent claimer (another worker, a BullMQ retry, or a
+   * system.rebuild re-enqueue) loses the race and gets `false`; it must
+   * then exit without touching the external API.
+   *
+   * This is the only correct way to start a publication execution.
+   * markReserved() + markInProgress() as separate statements are NOT
+   * safe for this purpose — they have no status guard, and a race
+   * between two workers would let both proceed to the adapter, producing
+   * a duplicate external post.
+   */
+  async claimForPublishing(tx: Transaction, id: string): Promise<boolean> {
+    const rows = (await tx.execute(sql`
+      UPDATE publications
+      SET status = 'IN_PROGRESS',
+          updated_at = now()
+      WHERE id = ${id}
+        AND status IN ('SCHEDULED', 'RESERVED', 'RETRY')
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.length === 1;
+  }
+
+  /**
+   * @deprecated Not safe for publication claiming. Use
+   * claimForPublishing() instead. Kept only for any historical caller
+   * that has not yet been migrated.
+   */
   async markReserved(tx: Transaction, id: string): Promise<void> {
     await tx
       .update(publications)
@@ -145,6 +186,11 @@ export class PublicationsRepository {
       .where(eq(publications.id, id));
   }
 
+  /**
+   * @deprecated Not safe for publication claiming. Use
+   * claimForPublishing() instead. Kept only for any historical caller
+   * that has not yet been migrated.
+   */
   async markInProgress(tx: Transaction, id: string): Promise<void> {
     await tx
       .update(publications)

@@ -1,4 +1,4 @@
-import { and, desc, eq, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { interactionResponses } from '../schema/interaction/interaction-responses.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -153,5 +153,22 @@ export class InteractionResponsesRepository {
       .where(eq(interactionResponses.status, 'MODERATION_REQUIRED'))
       .orderBy(desc(interactionResponses.createdAt))
       .limit(limit);
+  }
+
+  /**
+   * Counts responses created for a destination since the given time.
+   * Used by the policy engine's rate limit check.
+   */
+  async countRecentByDestination(destinationId: string, since: Date): Promise<number> {
+    const [row] = await this.db
+      .select({ count: sql<number>`COUNT(*)::int` })
+      .from(interactionResponses)
+      .where(
+        and(
+          eq(interactionResponses.destinationId, destinationId),
+          gte(interactionResponses.createdAt, since),
+        ),
+      );
+    return row?.count ?? 0;
   }
 }

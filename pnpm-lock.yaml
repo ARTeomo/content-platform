@@ -163,9 +163,18 @@ importers:
 
   apps/worker:
     dependencies:
+      '@content-platform/authentication':
+        specifier: workspace:*
+        version: link:../../packages/authentication
       '@content-platform/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@content-platform/interaction-response':
+        specifier: workspace:*
+        version: link:../../packages/interaction-response
+      '@content-platform/publishers':
+        specifier: workspace:*
+        version: link:../../packages/publishers
       bullmq:
         specifier: 5.34.0
         version: 5.34.0

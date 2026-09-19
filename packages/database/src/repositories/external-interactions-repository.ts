@@ -113,6 +113,21 @@ export class ExternalInteractionsRepository {
     return { interaction: row, skipped: !wasInsertedOrUpdated };
   }
 
+  /**
+   * Look up an interaction by its internal id.
+   *
+   * Used by the interaction response services to resolve the parent
+   * interaction from a response row.
+   */
+  async findById(id: string): Promise<ExternalInteractionRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(externalInteractions)
+      .where(eq(externalInteractions.id, id))
+      .limit(1);
+    return row;
+  }
+
   async findByExternalId(
     interactionType: InteractionType,
     externalInteractionId: string,

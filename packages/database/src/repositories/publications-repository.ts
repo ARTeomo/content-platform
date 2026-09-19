@@ -50,14 +50,33 @@ export class PublicationsRepository {
    * Hot path for webhook processing: resolve a publication from the
    * Meta-side post ID. Served by the partial index
    * publications_external_post_id_idx.
+   *
+   * Returns `null` when no match is found (not `undefined`), so the
+   * result can be used directly as the `resolvePublicationId` return
+   * value in the change extractor context.
+   *
+   * The optional `destinationId` scopes the lookup when the caller has
+   * it available. Meta post IDs are globally unique, so the scope is
+   * defensive only.
    */
-  async findIdByExternalPostId(externalPostId: string): Promise<string | undefined> {
+  async findIdByExternalPostId(
+    externalPostId: string,
+    destinationId?: string,
+  ): Promise<string | null> {
+    const whereClause =
+      destinationId !== undefined
+        ? and(
+            eq(publications.externalPostId, externalPostId),
+            eq(publications.destinationId, destinationId),
+          )
+        : eq(publications.externalPostId, externalPostId);
+
     const [row] = await this.db
       .select({ id: publications.id })
       .from(publications)
-      .where(eq(publications.externalPostId, externalPostId))
+      .where(whereClause)
       .limit(1);
-    return row?.id;
+    return row?.id ?? null;
   }
 
   async findByExternalPostId(externalPostId: string): Promise<PublicationRow | undefined> {
@@ -103,8 +122,8 @@ export class PublicationsRepository {
 
   /**
    * Idempotency check: does a publication already exist for this
-   * candidate + destination pair? Used by the scheduler to avoid
-   * duplicate enqueues.
+   * candidate + destination pair with a confirmed external post ID?
+   * Used by the scheduler to avoid duplicate enqueues.
    */
   async existsByCandidateAndDestination(
     publicationCandidateId: string,

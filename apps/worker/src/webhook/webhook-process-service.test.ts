@@ -1,14 +1,21 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createDatabaseClient,
+  DestinationsRepository,
   ExternalInteractionsRepository,
-  ProviderCredentialsRepository,
+  InteractionResponsesRepository,
   PublicationsRepository,
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
   type DatabaseClient,
 } from '@content-platform/database';
+import type { InteractionResponseService } from '../interaction-response/interaction-response-service.js';
+import type {
+  DecideOutcome,
+  InteractionResponseConfig,
+  TemplateMap,
+} from '../interaction-response/types.js';
 import { ChangeExtractorRegistry } from './change-extractor.js';
 import { FeedChangeExtractor } from './feed-extractor.js';
 import { MentionChangeExtractor } from './mention-extractor.js';
@@ -16,10 +23,19 @@ import { WebhookProcessService } from './webhook-process-service.js';
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL;
 
+const DEFAULT_CONFIG: InteractionResponseConfig = {
+  rules: [],
+  maxResponsesPerHour: 20,
+  minIntervalSeconds: 30,
+};
+
+const DEFAULT_TEMPLATES: TemplateMap = {};
+
 describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
   let client: DatabaseClient;
   let service: WebhookProcessService;
   let eventsRepo: WebhookEventsRepository;
+  let decideSpy: ReturnType<typeof vi.fn>;
   let destinationId: string;
 
   beforeAll(async () => {
@@ -30,11 +46,24 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
     const deliveriesRepo = new WebhookDeliveriesRepository(client.db);
     const interactionsRepo = new ExternalInteractionsRepository(client.db);
     const publicationsRepo = new PublicationsRepository(client.db);
-    new ProviderCredentialsRepository(client.db); // reserved for later phases
+    const destinationsRepo = new DestinationsRepository(client.db);
+    const responsesRepo = new InteractionResponsesRepository(client.db);
 
     const registry = new ChangeExtractorRegistry()
       .register(new FeedChangeExtractor())
       .register(new MentionChangeExtractor());
+
+    // The DB-backed test focuses on extraction and materialization.
+    // The interaction response decision is exercised by
+    // webhook-process-service-policy.test.ts. Here the service is
+    // stubbed so the test does not enqueue real outbox jobs.
+    decideSpy = vi.fn(async (): Promise<DecideOutcome> => ({
+      kind: 'IGNORED',
+      reason: 'test stub',
+    }));
+    const interactionResponseService = {
+      decide: decideSpy,
+    } as unknown as InteractionResponseService;
 
     service = new WebhookProcessService({
       txManager,
@@ -42,7 +71,12 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
       deliveriesRepo,
       interactionsRepo,
       publicationsRepo,
+      destinationsRepo,
+      responsesRepo,
       extractorRegistry: registry,
+      interactionResponseService,
+      interactionResponseConfig: DEFAULT_CONFIG,
+      templates: DEFAULT_TEMPLATES,
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     });
 
@@ -54,6 +88,7 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
   });
 
   beforeEach(async () => {
+    decideSpy.mockClear();
     await client.sql`TRUNCATE webhook_deliveries, external_interactions, webhook_events RESTART IDENTITY CASCADE`;
   });
 
@@ -118,6 +153,9 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
     `;
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]!.status).toBe('SUCCESS');
+
+    // The policy decision is invoked for the newly created interaction.
+    expect(decideSpy).toHaveBeenCalledTimes(1);
   });
 
   it('processes a mention event', async () => {
@@ -175,6 +213,7 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
 
     const outcome = await service.processEvent(event!.id);
     expect(outcome.status).toBe('SKIPPED');
+    expect(decideSpy).not.toHaveBeenCalled();
   });
 
   it('handles unknown fields gracefully (no extractor)', async () => {
@@ -196,11 +235,13 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
     if (outcome.status === 'PROCESSED') {
       expect(outcome.interactionsCreated).toBe(0);
     }
+    expect(decideSpy).not.toHaveBeenCalled();
   });
 
   it('returns SKIPPED for a non-existent event', async () => {
     const outcome = await service.processEvent('00000000-0000-0000-0000-000000000000');
     expect(outcome.status).toBe('SKIPPED');
+    expect(decideSpy).not.toHaveBeenCalled();
   });
 });
 

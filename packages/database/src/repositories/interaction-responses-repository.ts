@@ -111,12 +111,7 @@ export class InteractionResponsesRepository {
     const rows = await tx
       .update(interactionResponses)
       .set({ status: 'IN_PROGRESS', updatedAt: new Date() })
-      .where(
-        and(
-          eq(interactionResponses.id, id),
-          inArray(interactionResponses.status, expected),
-        ),
-      )
+      .where(and(eq(interactionResponses.id, id), inArray(interactionResponses.status, expected)))
       .returning();
     return rows[0];
   }

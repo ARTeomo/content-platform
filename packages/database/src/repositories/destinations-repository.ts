@@ -8,11 +8,7 @@ export class DestinationsRepository {
   constructor(private readonly db: Database) {}
 
   async findById(id: string): Promise<DestinationRow | undefined> {
-    const [row] = await this.db
-      .select()
-      .from(destinations)
-      .where(eq(destinations.id, id))
-      .limit(1);
+    const [row] = await this.db.select().from(destinations).where(eq(destinations.id, id)).limit(1);
     return row;
   }
 

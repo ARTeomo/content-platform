@@ -95,7 +95,5 @@ export class MetaResponseReconciler {
 function extractDataArray(data: Record<string, unknown>): GraphReplyRow[] {
   const raw = data.data;
   if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (r): r is Record<string, unknown> => r !== null && typeof r === 'object',
-  );
+  return raw.filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object');
 }

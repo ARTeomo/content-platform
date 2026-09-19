@@ -6,6 +6,7 @@ import {
   InteractionResponseReconciliationsRepository,
   InteractionResponsesRepository,
   OutboxRepository,
+  PublicationAttemptsRepository,
   PublicationsRepository,
   TransactionManager,
   WebhookDeliveriesRepository,
@@ -13,6 +14,7 @@ import {
 } from '@content-platform/database';
 import {
   MetaInteractionAdapter,
+  MetaPublisherAdapter,
   MetaResponseReconciler,
   NoopMetaRateLimiter,
 } from '@content-platform/publishers';
@@ -39,6 +41,11 @@ import {
   type WebhookRespondJobData,
   type WebhookRespondReconcileJobData,
 } from './interaction-response/index.js';
+import {
+  ContentPublishService,
+  ContentPublishWorker,
+  type ContentPublishJobData,
+} from './publication/index.js';
 
 /**
  * Default interaction response configuration. Real values are loaded
@@ -71,6 +78,7 @@ async function main(): Promise<void> {
   const deliveriesRepo = new WebhookDeliveriesRepository(db.db);
   const interactionsRepo = new ExternalInteractionsRepository(db.db);
   const publicationsRepo = new PublicationsRepository(db.db);
+  const publicationAttemptsRepo = new PublicationAttemptsRepository(db.db);
   const destinationsRepo = new DestinationsRepository(db.db);
   const responsesRepo = new InteractionResponsesRepository(db.db);
   const attemptsRepo = new InteractionResponseAttemptsRepository(db.db);
@@ -124,7 +132,7 @@ async function main(): Promise<void> {
     service: webhookProcessService,
   });
 
-  // ---- webhook.respond + reconcile wiring ----
+  // ---- Meta Graph bridge + adapters ----
 
   const metaGraphBridge = new MetaGraphBridge({
     apiVersion: config.metaGraphApiVersion,
@@ -146,10 +154,21 @@ async function main(): Promise<void> {
     { apiVersion: config.metaGraphApiVersion },
   );
 
+  const metaPublisherAdapter = new MetaPublisherAdapter(
+    {
+      graphClient: metaGraphBridge,
+      rateLimiter: new NoopMetaRateLimiter(),
+      getAccessToken,
+    },
+    { apiVersion: config.metaGraphApiVersion },
+  );
+
   const metaReconciler = new MetaResponseReconciler({
     graphGetClient: metaGraphBridge,
     getAccessToken,
   });
+
+  // ---- webhook.respond + reconcile wiring ----
 
   const webhookRespondService = new WebhookRespondService({
     txManager,
@@ -202,6 +221,32 @@ async function main(): Promise<void> {
     service: webhookRespondReconcileService,
   });
 
+  // ---- content.publish wiring ----
+
+  const contentPublishService = new ContentPublishService({
+    db: db.db,
+    txManager,
+    publicationsRepo,
+    attemptsRepo: publicationAttemptsRepo,
+    publisherAdapter: metaPublisherAdapter,
+  });
+
+  const contentPublishWorker = new ContentPublishWorker({
+    consumerFactory: (options) =>
+      new BullMqJobConsumer<ContentPublishJobData>({
+        redisUrl: config.redisUrl,
+        queueName: options.queueName,
+        processor: options.processor,
+        onFailed: (jobId, err) => {
+          console.error(`[content.publish] job ${jobId ?? '<unknown>'} failed: ${err.message}`);
+        },
+        onError: (err) => {
+          console.error(`[content.publish] consumer error: ${err.message}`);
+        },
+      }),
+    service: contentPublishService,
+  });
+
   // ---- shutdown ----
 
   let shuttingDown = false;
@@ -209,6 +254,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[worker] received ${signal}, shutting down`);
+    await contentPublishWorker.close();
     await webhookRespondReconcileWorker.close();
     await webhookRespondWorker.close();
     await webhookProcessWorker.close();
@@ -223,7 +269,7 @@ async function main(): Promise<void> {
 
   if (!config.metaPageAccessToken) {
     console.warn(
-      '[worker] META_PAGE_ACCESS_TOKEN is not set — webhook.respond will fail with AUTHENTICATION_ERROR on every response',
+      '[worker] META_PAGE_ACCESS_TOKEN is not set — webhook.respond and content.publish will fail with AUTHENTICATION_ERROR',
     );
   }
 

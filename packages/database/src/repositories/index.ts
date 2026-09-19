@@ -30,13 +30,31 @@ export {
   type UpsertResult as ExternalInteractionUpsertResult,
 } from './external-interactions-repository.js';
 
-export {
-  ProviderCredentialsRepository,
-  type ProviderCredentialInput,
-  type ProviderCredentialLookup,
-  type ProviderCredentialRow,
-  type CredentialScope,
-  type CredentialStatus,
-} from './provider-credentials-repository.js';
+export { ProviderCredentialsRepository } from './provider-credentials-repository.js';
 
 export { PublicationsRepository } from './publications-repository.js';
+
+// Phase 18b — interaction response lifecycle
+
+export {
+  InteractionResponsesRepository,
+  type InteractionResponseInput,
+  type InteractionResponseStatus,
+} from './interaction-responses-repository.js';
+
+export {
+  InteractionResponseAttemptsRepository,
+  type AttemptStatus,
+} from './interaction-response-attempts-repository.js';
+
+export {
+  InteractionModerationActionsRepository,
+  type ModerationAction,
+  type ModerationActionInput,
+} from './interaction-moderation-actions-repository.js';
+
+export {
+  InteractionResponseReconciliationsRepository,
+  type ReconciliationInput,
+  type ReconciliationStatus,
+} from './interaction-response-reconciliations-repository.js';

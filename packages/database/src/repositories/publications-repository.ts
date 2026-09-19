@@ -54,10 +54,6 @@ export class PublicationsRepository {
    * Returns `null` when no match is found (not `undefined`), so the
    * result can be used directly as the `resolvePublicationId` return
    * value in the change extractor context.
-   *
-   * The optional `destinationId` scopes the lookup when the caller has
-   * it available. Meta post IDs are globally unique, so the scope is
-   * defensive only.
    */
   async findIdByExternalPostId(
     externalPostId: string,
@@ -123,7 +119,6 @@ export class PublicationsRepository {
   /**
    * Idempotency check: does a publication already exist for this
    * candidate + destination pair with a confirmed external post ID?
-   * Used by the scheduler to avoid duplicate enqueues.
    */
   async existsByCandidateAndDestination(
     publicationCandidateId: string,
@@ -193,5 +188,67 @@ export class PublicationsRepository {
       .update(publications)
       .set({ status: 'RECONCILIATION', updatedAt: new Date() })
       .where(eq(publications.id, id));
+  }
+
+  /**
+   * Atomically claim due SCHEDULED publications for scheduling.
+   *
+   * Moves rows from SCHEDULED to RESERVED. Only rows whose scheduled_at
+   * is <= now are claimed. Uses FOR UPDATE SKIP LOCKED so concurrent
+   * scheduler instances do not claim the same row.
+   *
+   * The caller is expected to enqueue the corresponding outbox job in
+   * the same transaction. Returned IDs are ordered by scheduled_at.
+   */
+  async claimDueScheduled(tx: Transaction, limit: number): Promise<string[]> {
+    const rows = (await tx.execute(sql`
+      WITH claimed AS (
+        SELECT id FROM publications
+        WHERE status = 'SCHEDULED'
+          AND scheduled_at IS NOT NULL
+          AND scheduled_at <= now()
+        ORDER BY scheduled_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE publications
+      SET status = 'RESERVED',
+          updated_at = now()
+      WHERE id IN (SELECT id FROM claimed)
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Touch stale RECONCILIATION publications.
+   *
+   * Updates updated_at = now() as the "last scheduled for reconciliation"
+   * marker so the next scan skips these rows. Uses FOR UPDATE SKIP
+   * LOCKED so concurrent scheduler instances do not touch the same row.
+   *
+   * Returns the touched publication IDs. The caller is expected to
+   * enqueue the corresponding outbox job in the same transaction.
+   */
+  async touchStaleReconciliation(
+    tx: Transaction,
+    thresholdSeconds: number,
+    limit: number,
+  ): Promise<string[]> {
+    const rows = (await tx.execute(sql`
+      WITH claimed AS (
+        SELECT id FROM publications
+        WHERE status = 'RECONCILIATION'
+          AND updated_at < now() - interval '${sql.raw(String(thresholdSeconds))} seconds'
+        ORDER BY updated_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE publications
+      SET updated_at = now()
+      WHERE id IN (SELECT id FROM claimed)
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
   }
 }

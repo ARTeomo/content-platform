@@ -48,6 +48,8 @@ import {
   ContentPublishWorker,
   PublicationReconcileService,
   PublicationReconcileWorker,
+  PublicationSchedulerService,
+  PublicationSchedulerWorker,
   type ContentPublishJobData,
   type PublicationReconcileJobData,
 } from './publication/index.js';
@@ -282,6 +284,21 @@ async function main(): Promise<void> {
     service: publicationReconcileService,
   });
 
+  // ---- publication scheduler wiring ----
+
+  const publicationSchedulerService = new PublicationSchedulerService({
+    txManager,
+    publicationsRepo,
+    outboxRepo,
+    batchSize: config.publicationScheduleBatchSize,
+    reconcileStaleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
+  });
+
+  const publicationSchedulerWorker = new PublicationSchedulerWorker({
+    scheduler: publicationSchedulerService,
+    intervalMs: config.publicationScheduleIntervalMs,
+  });
+
   // ---- shutdown ----
 
   let shuttingDown = false;
@@ -289,6 +306,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[worker] received ${signal}, shutting down`);
+    await publicationSchedulerWorker.stop();
     await publicationReconcileWorker.close();
     await contentPublishWorker.close();
     await webhookRespondReconcileWorker.close();
@@ -310,6 +328,7 @@ async function main(): Promise<void> {
   }
 
   console.info('[worker] started');
+  publicationSchedulerWorker.start();
   await dispatcher.start();
 }
 

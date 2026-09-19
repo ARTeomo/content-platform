@@ -10,6 +10,15 @@ export type { PublicationReconcileServiceDeps } from './publication-reconcile-se
 export { PublicationReconcileWorker } from './publication-reconcile-worker.js';
 export type { PublicationReconcileWorkerDeps } from './publication-reconcile-worker.js';
 
+export { PublicationSchedulerService } from './publication-scheduler-service.js';
+export type {
+  PublicationSchedulerServiceDeps,
+  PublicationSchedulerRunResult,
+} from './publication-scheduler-service.js';
+
+export { PublicationSchedulerWorker } from './publication-scheduler-worker.js';
+export type { PublicationSchedulerWorkerOptions } from './publication-scheduler-worker.js';
+
 export type {
   ContentPublishJobData,
   PublicationContext,

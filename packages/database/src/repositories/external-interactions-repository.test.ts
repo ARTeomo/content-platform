@@ -118,61 +118,117 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
  * `publications.id` (added in Phase 11). To test the COALESCE behavior on
  * publication_id, the test needs a real publication to reference.
  *
- * The scaffolding is created once per test run and is idempotent: a
- * stable `external_post_id` marker identifies the scaffolding row, and
- * the function returns its id if found.
+ * Idempotency contract:
+ *
+ *   - If the marker publication still exists, reuse it.
+ *   - Otherwise, create the whole chain with ON CONFLICT DO NOTHING at
+ *     every layer that has a unique constraint (destinations on
+ *     (type, external_id); content_items on canonical_url; stories and
+ *     publication_candidates have no unique constraint, so they are
+ *     looked up by a stable marker first).
+ *
+ * The function must not fail because a previous partial run left orphan
+ * destination or content_item rows behind.
  */
 async function ensurePublicationScaffolding(client: DatabaseClient): Promise<string> {
-  const marker = 'test-scaffolding-post';
+  const publicationMarker = 'test-scaffolding-post';
 
-  const existing = await client.sql<{ id: string }[]>`
-    SELECT id FROM publications WHERE external_post_id = ${marker}
+  // Fast path: publication still exists from a previous run.
+  const existingPub = await client.sql<{ id: string }[]>`
+    SELECT id FROM publications WHERE external_post_id = ${publicationMarker} LIMIT 1
   `;
-  if (existing[0]) {
-    return existing[0].id;
-  }
+  if (existingPub[0]) return existingPub[0].id;
 
-  return await client.sql.begin(async (tx) => {
-    const [destination] = await tx<{ id: string }[]>`
-      INSERT INTO destinations (name, type, external_id)
-      VALUES ('Test Destination', 'META', 'test-destination-scaffolding')
-      RETURNING id
-    `;
-    if (!destination) throw new Error('scaffolding: destination insert failed');
+  // Slow path: rebuild the FK chain, idempotently.
+  const destinationId = await ensureDestination(client);
+  const storyId = await ensureStory(client);
+  const contentItemId = await ensureContentItem(client);
+  const candidateId = await ensureCandidate(client, contentItemId, storyId);
 
-    const [story] = await tx<{ id: string }[]>`
-      INSERT INTO stories (title, status)
-      VALUES ('Test Story', 'ACTIVE')
-      RETURNING id
-    `;
-    if (!story) throw new Error('scaffolding: story insert failed');
+  const [publication] = await client.sql<{ id: string }[]>`
+    INSERT INTO publications (publication_candidate_id, destination_id, status, external_post_id)
+    VALUES (${candidateId}, ${destinationId}, 'PUBLISHED', ${publicationMarker})
+    RETURNING id
+  `;
+  if (!publication) throw new Error('scaffolding: publication insert failed');
+  return publication.id;
+}
 
-    const [contentItem] = await tx<{ id: string }[]>`
-      INSERT INTO content_items (canonical_url, status)
-      VALUES ('https://test.example.com/scaffolding', 'PUBLISHED')
-      RETURNING id
-    `;
-    if (!contentItem) throw new Error('scaffolding: content_item insert failed');
+async function ensureDestination(client: DatabaseClient): Promise<string> {
+  const marker = 'test-destination-scaffolding';
+  const [inserted] = await client.sql<{ id: string }[]>`
+    INSERT INTO destinations (name, type, external_id)
+    VALUES ('Test Destination', 'META', ${marker})
+    ON CONFLICT (type, external_id) DO NOTHING
+    RETURNING id
+  `;
+  if (inserted) return inserted.id;
 
-    const [candidate] = await tx<{ id: string }[]>`
-      INSERT INTO publication_candidates (
-        content_id, story_id, version, title, caption, summary, source_url, validation_status
-      )
-      VALUES (
-        ${contentItem.id}, ${story.id}, 1, 'Test', 'Test', 'Test',
-        'https://test.example.com/scaffolding', 'PASS'
-      )
-      RETURNING id
-    `;
-    if (!candidate) throw new Error('scaffolding: publication_candidate insert failed');
+  const [existing] = await client.sql<{ id: string }[]>`
+    SELECT id FROM destinations WHERE type = 'META' AND external_id = ${marker} LIMIT 1
+  `;
+  if (!existing) throw new Error('scaffolding: destination missing after conflict');
+  return existing.id;
+}
 
-    const [publication] = await tx<{ id: string }[]>`
-      INSERT INTO publications (publication_candidate_id, destination_id, status, external_post_id)
-      VALUES (${candidate.id}, ${destination.id}, 'PUBLISHED', ${marker})
-      RETURNING id
-    `;
-    if (!publication) throw new Error('scaffolding: publication insert failed');
+async function ensureStory(client: DatabaseClient): Promise<string> {
+  // stories has no unique constraint — use a stable title marker.
+  const marker = 'Test Story (scaffolding)';
+  const [existing] = await client.sql<{ id: string }[]>`
+    SELECT id FROM stories WHERE title = ${marker} LIMIT 1
+  `;
+  if (existing) return existing.id;
 
-    return publication.id;
-  });
+  const [inserted] = await client.sql<{ id: string }[]>`
+    INSERT INTO stories (title, status)
+    VALUES (${marker}, 'ACTIVE')
+    RETURNING id
+  `;
+  if (!inserted) throw new Error('scaffolding: story insert failed');
+  return inserted.id;
+}
+
+async function ensureContentItem(client: DatabaseClient): Promise<string> {
+  const marker = 'https://test.example.com/scaffolding';
+  const [inserted] = await client.sql<{ id: string }[]>`
+    INSERT INTO content_items (canonical_url, status)
+    VALUES (${marker}, 'PUBLISHED')
+    ON CONFLICT (canonical_url) DO NOTHING
+    RETURNING id
+  `;
+  if (inserted) return inserted.id;
+
+  const [existing] = await client.sql<{ id: string }[]>`
+    SELECT id FROM content_items WHERE canonical_url = ${marker} LIMIT 1
+  `;
+  if (!existing) throw new Error('scaffolding: content_item missing after conflict');
+  return existing.id;
+}
+
+async function ensureCandidate(
+  client: DatabaseClient,
+  contentItemId: string,
+  storyId: string,
+): Promise<string> {
+  // publication_candidates has no unique constraint on (content_id,
+  // story_id) — look up an existing candidate first.
+  const [existing] = await client.sql<{ id: string }[]>`
+    SELECT id FROM publication_candidates
+    WHERE content_id = ${contentItemId} AND story_id = ${storyId}
+    LIMIT 1
+  `;
+  if (existing) return existing.id;
+
+  const [inserted] = await client.sql<{ id: string }[]>`
+    INSERT INTO publication_candidates (
+      content_id, story_id, version, title, caption, summary, source_url, validation_status
+    )
+    VALUES (
+      ${contentItemId}, ${storyId}, 1, 'Test', 'Test', 'Test',
+      'https://test.example.com/scaffolding', 'PASS'
+    )
+    RETURNING id
+  `;
+  if (!inserted) throw new Error('scaffolding: publication_candidate insert failed');
+  return inserted.id;
 }

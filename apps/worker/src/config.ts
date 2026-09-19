@@ -22,6 +22,17 @@ export interface WorkerConfig {
   outboxRecoveryIntervalSeconds: number;
   outboxCleanupRetentionDays: number;
 
+  // Publication scheduler
+  /** Polling interval for the publication scheduler, milliseconds. */
+  publicationScheduleIntervalMs: number;
+  /** Maximum number of publications to claim per scan. */
+  publicationScheduleBatchSize: number;
+  /**
+   * A RECONCILIATION publication is considered stale when its updated_at
+   * is older than this many seconds.
+   */
+  publicationReconcileStaleThresholdSeconds: number;
+
   // Interaction response
   /** Meta Graph API version prefix, e.g. `v21.0`. */
   metaGraphApiVersion: string;
@@ -66,6 +77,13 @@ export function loadWorkerConfig(): WorkerConfig {
     outboxDispatchStaleThresholdSeconds: optionalInt('OUTBOX_DISPATCH_STALE_THRESHOLD_SECONDS', 60),
     outboxRecoveryIntervalSeconds: optionalInt('OUTBOX_RECOVERY_INTERVAL_SECONDS', 30),
     outboxCleanupRetentionDays: optionalInt('OUTBOX_CLEANUP_RETENTION_DAYS', 7),
+
+    publicationScheduleIntervalMs: optionalInt('PUBLICATION_SCHEDULE_INTERVAL_MS', 30000),
+    publicationScheduleBatchSize: optionalInt('PUBLICATION_SCHEDULE_BATCH_SIZE', 50),
+    publicationReconcileStaleThresholdSeconds: optionalInt(
+      'PUBLICATION_RECONCILE_STALE_THRESHOLD_SECONDS',
+      300,
+    ),
 
     metaGraphApiVersion: process.env.META_GRAPH_API_VERSION ?? 'v21.0',
     metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN,

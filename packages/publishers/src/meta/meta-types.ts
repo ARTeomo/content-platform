@@ -1,3 +1,13 @@
+/**
+ * Types for the Meta adapters (interaction + publisher + reconciler).
+ *
+ * The adapters are deliberately decoupled from the concrete Graph client
+ * and credential service implementations via the GraphClient,
+ * GraphGetClient, and getAccessToken interfaces. This keeps the adapters
+ * testable in isolation and independent of the authentication package's
+ * internal API.
+ */
+
 export type MetaErrorCategory =
   | 'AUTHENTICATION_ERROR'
   | 'AUTHORIZATION_ERROR'
@@ -8,7 +18,9 @@ export type MetaErrorCategory =
   | 'CONTENT_REJECTED'
   | 'UNKNOWN';
 
-// ---------- POST ----------
+// ---------------------------------------------------------------------------
+// Graph client — POST
+// ---------------------------------------------------------------------------
 
 export interface GraphPostInput {
   path: string;
@@ -26,18 +38,13 @@ export type GraphPostResult =
       retryAfterSeconds?: number;
     };
 
-export interface GraphPostClient {
+export interface GraphClient {
   post(input: GraphPostInput): Promise<GraphPostResult>;
 }
 
-/**
- * Backward-compatible alias. The MetaInteractionAdapter consumes only
- * the POST capability; the alias exists so the adapter's dep name and
- * the existing tests stay stable.
- */
-export type GraphClient = GraphPostClient;
-
-// ---------- GET ----------
+// ---------------------------------------------------------------------------
+// Graph client — GET
+// ---------------------------------------------------------------------------
 
 export interface GraphGetInput {
   path: string;
@@ -59,7 +66,9 @@ export interface GraphGetClient {
   get(input: GraphGetInput): Promise<GraphGetResult>;
 }
 
-// ---------- Rate limiting ----------
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
 
 export interface RateLimitDecision {
   allowed: boolean;
@@ -67,11 +76,26 @@ export interface RateLimitDecision {
   remaining?: number;
 }
 
+/**
+ * Rate limiter for interaction responses (pages_manage_engagement BUC).
+ */
 export interface MetaRateLimiter {
   checkEngagement(destinationId: string): Promise<RateLimitDecision>;
 }
 
-// ---------- Reply ----------
+/**
+ * Rate limiter for publications (pages_manage_posts BUC).
+ *
+ * Separate from `MetaRateLimiter` because Meta's Business Use Case (BUC)
+ * limits for engagement and publishing are independent.
+ */
+export interface MetaPublishRateLimiter {
+  checkPublish(destinationId: string): Promise<RateLimitDecision>;
+}
+
+// ---------------------------------------------------------------------------
+// Interaction response types
+// ---------------------------------------------------------------------------
 
 export interface ReplyInput {
   destinationId: string;
@@ -86,6 +110,60 @@ export type ReplyResult =
   | {
       status: 'SUCCESS';
       externalResponseId: string;
+      requestPayloadHash: string;
+    }
+  | {
+      status: 'RETRY';
+      errorCategory: MetaErrorCategory;
+      errorMessage: string;
+      retryAfterSeconds?: number;
+      requestPayloadHash: string;
+    }
+  | {
+      status: 'FAILED';
+      errorCategory: MetaErrorCategory;
+      errorMessage: string;
+      shouldInvalidateCredential?: boolean;
+      requestPayloadHash: string;
+    }
+  | {
+      status: 'UNKNOWN';
+      errorCategory: MetaErrorCategory;
+      errorMessage: string;
+      requestPayloadHash: string;
+    };
+
+// ---------------------------------------------------------------------------
+// Publisher types
+// ---------------------------------------------------------------------------
+
+export interface PostToPageInput {
+  destinationId: string;
+  /**
+   * Meta Page ID (destinations.external_id). Not the internal UUID.
+   */
+  pageId: string;
+  /** Post caption / message body. */
+  message: string;
+  /**
+   * Optional source URL. When set, the post includes a link card. Ignored
+   * when `imageUrl` is provided (photo posts do not carry a separate link
+   * card in DB v1).
+   */
+  link?: string;
+  /**
+   * Optional image URL. When set, the post is created via `/photos` with
+   * the caption as the photo caption.
+   */
+  imageUrl?: string;
+  /** SHA-256 of the outbound body; stored on the attempt for reconciliation. */
+  requestPayloadHash: string;
+}
+
+export type PostToPageResult =
+  | {
+      status: 'SUCCESS';
+      externalPostId: string;
       requestPayloadHash: string;
     }
   | {

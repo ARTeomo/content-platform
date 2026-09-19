@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/database" },
     { "path": "./packages/authentication" },
+    { "path": "./packages/interaction-response" },
     { "path": "./apps/worker" },
     { "path": "./apps/api" }
   ]

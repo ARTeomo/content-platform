@@ -6,8 +6,16 @@ overrides:
   drizzle-orm: 0.45.2
   drizzle-kit: 0.31.10
   typescript: 7.0.2
-  bullmq: 5.34.0
-  ioredis: 5.4.2
+
+# Restrict platform-specific optional dependencies to the current
+# platform only. Without this, `pnpm install --force` downloads every
+# platform variant (linux-arm64, darwin-x64, win32-arm64, ...) even
+# though they are never used on the development machine.
+supportedArchitectures:
+  os:
+    - win32
+  cpu:
+    - x64
 
 allowBuilds:
   esbuild: true

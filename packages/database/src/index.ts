@@ -12,11 +12,16 @@ export {
 export * as schema from './schema/index.js';
 export { TransactionManager, type Transaction } from './transaction/index.js';
 
+// Repositories (single re-export from the repository barrel)
+
 export {
+  // Outbox
   OutboxRepository,
   type OutboxJob,
   type OutboxJobInput,
   type OutboxJobStatus,
+
+  // Webhook persistence
   WebhookSubscriptionsRepository,
   type WebhookSubscriptionInput,
   WebhookSubscriptionHealthRepository,
@@ -29,17 +34,29 @@ export {
   type ExternalInteractionDraft,
   type InteractionType,
   type ExternalInteractionUpsertResult,
+
+  // Provider credentials
   ProviderCredentialsRepository,
   type ProviderCredentialInput,
   type ProviderCredentialLookup,
   type ProviderCredentialRow,
   type CredentialScope,
   type CredentialStatus,
-  PublicationsRepository,
-} from './repositories/index.js';
 
-// Phase 18b — interaction response repositories
-export {
+  // Destinations
+  DestinationsRepository,
+
+  // Publication lifecycle (Phase 19a)
+  PublicationsRepository,
+  type PublicationCreateInput,
+  type PublicationStatus,
+  PublicationAttemptsRepository,
+  type PublicationAttemptStatus,
+  PublicationReconciliationsRepository,
+  type PublicationReconciliationInput,
+  type ReconciliationResult,
+
+  // Interaction response lifecycle (Phase 18b)
   InteractionResponsesRepository,
   type InteractionResponseInput,
   type InteractionResponseStatus,
@@ -52,6 +69,3 @@ export {
   type ReconciliationInput,
   type ReconciliationStatus,
 } from './repositories/index.js';
-
-// Destinations repository (used by webhook process + interaction response)
-export { DestinationsRepository } from './repositories/index.js';

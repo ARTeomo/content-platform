@@ -39,9 +39,28 @@ export {
   type ProviderCredentialLookup,
 } from './provider-credentials-repository.js';
 
-export { PublicationsRepository } from './publications-repository.js';
+export { DestinationsRepository } from './destinations-repository.js';
 
-// Phase 18b — interaction response lifecycle
+// Publication lifecycle (Phase 19a)
+
+export {
+  PublicationsRepository,
+  type PublicationCreateInput,
+  type PublicationStatus,
+} from './publications-repository.js';
+
+export {
+  PublicationAttemptsRepository,
+  type PublicationAttemptStatus,
+} from './publication-attempts-repository.js';
+
+export {
+  PublicationReconciliationsRepository,
+  type PublicationReconciliationInput,
+  type ReconciliationResult,
+} from './publication-reconciliations-repository.js';
+
+// Interaction response lifecycle (Phase 18b)
 
 export {
   InteractionResponsesRepository,
@@ -65,5 +84,3 @@ export {
   type ReconciliationInput,
   type ReconciliationStatus,
 } from './interaction-response-reconciliations-repository.js';
-
-export { DestinationsRepository } from './destinations-repository.js';

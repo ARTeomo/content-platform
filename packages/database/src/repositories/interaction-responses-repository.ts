@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { interactionResponses } from '../schema/interaction/interaction-responses.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -31,13 +31,6 @@ export interface InteractionResponseInput {
   scheduledAt?: Date;
 }
 
-/**
- * Repository for the outbound interaction response lifecycle.
- *
- * One response per interaction (unique constraint on interaction_id).
- * The state machine is enforced by the service layer; this repository
- * is persistence-only.
- */
 export class InteractionResponsesRepository {
   constructor(private readonly db: Database) {}
 
@@ -87,6 +80,20 @@ export class InteractionResponsesRepository {
       .where(eq(interactionResponses.id, id));
   }
 
+  async claimForResponding(
+    tx: Transaction,
+    id: string,
+    expected: InteractionResponseStatus[],
+  ): Promise<InteractionResponseRow | undefined> {
+    if (expected.length === 0) return undefined;
+    const rows = await tx
+      .update(interactionResponses)
+      .set({ status: 'IN_PROGRESS', updatedAt: new Date() })
+      .where(and(eq(interactionResponses.id, id), inArray(interactionResponses.status, expected)))
+      .returning();
+    return rows[0];
+  }
+
   async updateBody(tx: Transaction, id: string, body: string): Promise<void> {
     await tx
       .update(interactionResponses)
@@ -132,6 +139,13 @@ export class InteractionResponsesRepository {
       .where(eq(interactionResponses.id, id));
   }
 
+  async markRetry(tx: Transaction, id: string): Promise<void> {
+    await tx
+      .update(interactionResponses)
+      .set({ status: 'RETRY', updatedAt: new Date() })
+      .where(eq(interactionResponses.id, id));
+  }
+
   async findScheduledDue(now: Date, limit: number): Promise<InteractionResponseRow[]> {
     return await this.db
       .select()
@@ -155,10 +169,6 @@ export class InteractionResponsesRepository {
       .limit(limit);
   }
 
-  /**
-   * Counts responses created for a destination since the given time.
-   * Used by the policy engine's rate limit check.
-   */
   async countRecentByDestination(destinationId: string, since: Date): Promise<number> {
     const [row] = await this.db
       .select({ count: sql<number>`COUNT(*)::int` })

@@ -23,35 +23,13 @@ export interface ExternalInteractionDraft {
 
 export interface UpsertResult {
   interaction: ExternalInteractionRow;
-  /** True if the incoming event was older than the persisted one and was skipped. */
   skipped: boolean;
 }
 
-/**
- * Repository for external interactions.
- *
- * The central operation is `upsertMonotonic`, which inserts a new
- * interaction or updates the existing one **only if** the incoming
- * `occurred_at` is newer than the persisted one. This protects against
- * out-of-order delivery by the external provider.
- */
 export class ExternalInteractionsRepository {
   constructor(private readonly db: Database) {}
 
-  /**
-   * Insert or update an interaction, enforcing monotonic `occurred_at`.
-   *
-   * If the incoming event is older than the persisted one, the persisted
-   * row is left untouched and the result reports `skipped: true`.
-   *
-   * `publication_id` is preserved when the incoming event does not carry
-   * one (COALESCE with the existing value).
-   */
   async upsertMonotonic(tx: Transaction, draft: ExternalInteractionDraft): Promise<UpsertResult> {
-    // `RETURNING *` would return snake_case column names, which do not
-    // match the Drizzle `$inferSelect` camelCase type. The RETURNING list
-    // below uses quoted aliases so that PostgreSQL returns camelCase keys
-    // and the runtime object matches `ExternalInteractionRow`.
     const rows = (await tx.execute(sql`
       INSERT INTO external_interactions (
         webhook_event_id,
@@ -78,7 +56,7 @@ export class ExternalInteractionsRepository {
         ${draft.actorDisplayName ?? null},
         ${draft.content ?? null},
         ${draft.permalink ?? null},
-        ${draft.occurredAt.toISOString()}::timestamptz,
+        ${draft.occurredAt},
         ${JSON.stringify(draft.rawMetadata ?? {})}::jsonb
       )
       ON CONFLICT (interaction_type, external_interaction_id)
@@ -95,22 +73,7 @@ export class ExternalInteractionsRepository {
         raw_metadata       = EXCLUDED.raw_metadata,
         updated_at         = now()
       WHERE external_interactions.occurred_at <= EXCLUDED.occurred_at
-      RETURNING
-        id,
-        webhook_event_id        AS "webhookEventId",
-        destination_id          AS "destinationId",
-        publication_id          AS "publicationId",
-        interaction_type        AS "interactionType",
-        external_interaction_id AS "externalInteractionId",
-        parent_external_id      AS "parentExternalId",
-        actor_external_id       AS "actorExternalId",
-        actor_display_name      AS "actorDisplayName",
-        content,
-        permalink,
-        occurred_at             AS "occurredAt",
-        raw_metadata            AS "rawMetadata",
-        created_at              AS "createdAt",
-        updated_at              AS "updatedAt"
+      RETURNING *
     `)) as unknown as ExternalInteractionRow[];
 
     const first = rows[0];
@@ -134,6 +97,15 @@ export class ExternalInteractionsRepository {
     }
 
     return { interaction: existing, skipped: true };
+  }
+
+  async findById(id: string): Promise<ExternalInteractionRow | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(externalInteractions)
+      .where(eq(externalInteractions.id, id))
+      .limit(1);
+    return row;
   }
 
   async findByExternalId(

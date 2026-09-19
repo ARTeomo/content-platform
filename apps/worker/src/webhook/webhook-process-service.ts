@@ -141,7 +141,7 @@ export class WebhookProcessService {
             destinationId,
             webhookEventId: event.id,
             resolvePublicationId: (postId) =>
-              publicationsRepo.findIdByExternalPostId(destinationId, postId),
+              publicationsRepo.findIdByExternalPostId(postId, destinationId),
           });
 
           for (const draft of drafts) {

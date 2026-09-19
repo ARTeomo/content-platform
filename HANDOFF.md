@@ -1,25 +1,145 @@
-# Handoff — Project State
+# Handoff --- Project State
 
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-09-19
-**Last commit:** `07b9367` (feat(worker): wire webhook respond worker and meta graph bridge)
+**Snapshot date:** 2026-09-19\
+**Last commit:** `641d106` (feat(worker): add publication reconcile
+worker)\
 **Repository:** https://github.com/ARTeomo/content-platform
 
 ---
 
-## Milestone: Phase 18b complete — interaction response lifecycle
+## Milestone: Phase 19c complete --- publication reconciliation
 
-The complete two-way Meta integration is now closed. The platform can
-receive inbound interactions, decide on an outbound response through a
-deterministic policy engine, route it through a moderation gate, send
-it via the Graph API, and reconcile uncertain outcomes through both
-push and pull paths.
+The outbound Meta publication path now has both the execution and
+bounded pull-reconciliation layers wired into `apps/worker`.
 
-The full loop:
+Phase 19c adds the `publication.reconcile` service and worker, together
+with the Meta publication reconciler and the required database
+repositories. The worker is now able to investigate publications that
+entered `RECONCILIATION`, match a post on the destination Page feed, and
+apply the corresponding durable state transition.
 
+The outbound execution/reconciliation loop is:
+
+```text
+publications
+  → content.publish
+  → OutboxDispatcher
+  → BullMQ content.publish
+  → ContentPublishWorker
+  → ContentPublishService
+  → MetaPublisherAdapter
+  → Meta Graph API
+  → publications.status
+
+When the publication outcome is uncertain:
+
+publications.status = RECONCILIATION
+  → publication.reconcile
+  → BullMQ publication.reconcile
+  → PublicationReconcileWorker
+  → PublicationReconcileService
+  → MetaPublicationReconciler
+  → Meta Graph API feed lookup
+  → durable reconciliation result
+  → PUBLISHED | RETRY | RECONCILIATION
 ```
+
+The reconciliation service applies these documented outcomes:
+
+- `PUBLISHED` when a unique matching external post is found.
+- `RETRY_ELIGIBLE` when no match is found after the propagation grace
+  period.
+- `STILL_UNKNOWN` when the result remains inconclusive.
+- A publication with no corresponding attempt record is treated as a
+  data integrity failure and is moved to `FAILED`.
+
+The publication reconciliation path is deliberately separate from the
+interaction-response reconciliation path. Both use the same
+architectural principles --- durable state in PostgreSQL, asynchronous
+execution through BullMQ, and explicit reconciliation of uncertain
+external outcomes --- but operate on different domain state machines.
+
+### Verification state
+
+The current local verification recorded for the Phase 19c state is:
+
+```text
+203 passed
+0 failed
+0 skipped
+6 workspace packages
+```
+
+The complete 203-test run requires both `TEST_DATABASE_URL` and
+`TEST_REDIS_URL` to be exported. The DB/Redis-dependent tests are
+therefore not equivalent to the earlier 99 passed / 47 skipped local run
+performed before the Phase 19c completion.
+
+The six workspace packages are:
+
+```text
+packages/database
+packages/authentication
+packages/interaction-response
+packages/publishers
+apps/worker
+apps/api
+```
+
+The latest GitHub commit `641d106` contains the `publication.reconcile`
+worker wiring, the `PublicationReconcileService`, and the corresponding
+worker/type exports.
+
+The current state should therefore be interpreted as **Phase 19c
+complete / Phase 19d pending**, not as a partially implemented
+reconciliation subsystem.
+
+---
+
+## Milestone progression: Phase 19a → 19b → 19c
+
+The outbound publication work has progressed incrementally rather than
+as a single architectural jump:
+
+- **Phase 19a — outbound publication execution:** the existing
+  `content.publish` path was established as the durable outbound
+  execution path:
+  `publications` → transactional outbox → BullMQ → `ContentPublishWorker`
+  → `ContentPublishService` → `MetaPublisherAdapter` → Meta Graph API.
+- **Phase 19b — uncertain-outcome reconciliation foundation:** the
+  publication lifecycle was extended with explicit reconciliation
+  semantics and durable attempt/reconciliation state so an uncertain
+  external outcome is not incorrectly treated as either success or
+  failure.
+- **Phase 19c — worker/service/reconciler completion:** the
+  `publication.reconcile` queue, worker, service, and
+  `MetaPublicationReconciler` were wired into `apps/worker`, completing
+  the execution/reconciliation layer.
+
+The remaining **Phase 19d** work is orchestration: scheduling due
+publications and stale reconciliation work into the transactional
+outbox. It is not a redesign of the Phase 19c publication path.
+
+This distinction is important when resuming development: **19c is
+complete at the worker/service/reconciler level; 19d adds controlled
+scheduling on top of it.**
+
+---
+
+## Milestone: Phase 18b complete --- interaction response lifecycle
+
+The complete two-way Meta integration is closed at the application
+level. The platform can receive inbound interactions, decide on an
+outbound response through a deterministic policy engine, route it
+through a moderation gate, send it through the Graph API, and reconcile
+uncertain outcomes through both push and pull paths.
+
+The full inbound → interaction-response loop:
+
+```text
 Meta POST (HTTPS, Live mode)
   → apps/api POST /api/v1/webhooks/meta
       1. HMAC-SHA256 signature verify (fail-closed → 401)
@@ -35,65 +155,69 @@ Meta POST (HTTPS, Live mode)
   → WebhookProcessWorker
   → WebhookProcessService
       a. materialize external_interactions (monotonic upsert)
-      b. push-reconciliation: actor == own Page → mark response RESPONDED
+      b. push-reconciliation: actor == own Page → mark matching response
+         RESPONDED
       c. otherwise: InteractionResponseService.decide(...)
-           → AUTO_RESPOND path enqueues outbox job (queue_name = 'webhook.respond')
+           → AUTO_RESPOND path enqueues outbox job
+             (queue_name = 'webhook.respond')
   → OutboxDispatcher
   → BullMQ webhook.respond queue
   → WebhookRespondWorker
   → WebhookRespondService
-      → MetaInteractionAdapter → Graph API
-      → on RETRY, BullMQ reschedules
-      → on UNKNOWN, marked for pull reconciliation
-  → (push reconciliation: our own reply reappears as a feed webhook)
-  → (pull reconciliation: WebhookRespondReconcileWorker queries the
-     parent comment's replies and matches by body)
+  → MetaInteractionAdapter
+  → Meta Graph API
+  → interaction_responses.status =
+       RESPONDED | RETRY | FAILED | UNKNOWN
 ```
 
-Evidence:
+The Phase 18b implementation contains:
 
-```
-99 passed | 0 failed | 47 skipped (DB-dependent)
-6 workspace packages
-13 repositories
-4 workers wired into apps/worker/src/index.ts
-```
-
-The interaction response lifecycle adds:
-
-- `packages/interaction-response` — pure, deterministic policy engine + template renderer
-- `packages/publishers` — MetaInteractionAdapter, MetaResponseReconciler, NoopMetaRateLimiter
-- 4 new repositories (`interaction_responses`, `interaction_response_attempts`, `interaction_moderation_actions`, `interaction_response_reconciliations`)
-- 3 new services (`InteractionResponseService`, `WebhookRespondService`, `WebhookRespondReconcileService`)
-- 2 new workers (`WebhookRespondWorker`, `WebhookRespondReconcileWorker`)
-- 2 new queues (`webhook.respond`, `webhook.respond.reconcile`)
-- Push-reconciliation hook integrated into `WebhookProcessService`
-- `MetaGraphBridge` — HTTP POST + GET bridge from the worker to the Graph API
+- `packages/interaction-response` --- pure, deterministic policy
+  engine and template renderer.
+- `MetaInteractionAdapter` --- Meta Graph API comment response
+  adapter.
+- `MetaResponseReconciler` --- pull reconciliation for uncertain
+  interaction responses.
+- `MetaGraphBridge` --- worker-side HTTP bridge for Graph API POST and
+  GET.
+- `InteractionResponseService`.
+- `WebhookRespondService`.
+- `WebhookRespondReconcileService`.
+- `WebhookRespondWorker`.
+- `WebhookRespondReconcileWorker`.
+- Four interaction-response repositories.
+- Push-reconciliation integrated into `WebhookProcessService`.
+- `webhook.respond` and `webhook.respond.reconcile` queues.
 
 ---
 
-## Milestone: Phase 18a complete — real Meta E2E verified (2026-09-18)
+## Milestone: Phase 18a complete --- real Meta E2E verified
 
-The complete inbound Meta integration was verified end-to-end against
-the **real Meta Graph API** in **Live** mode. A real comment on the
+The inbound Meta integration was verified end-to-end against the **real
+Meta Graph API** in **Live** mode. A real comment on the
 `contentplatform.dev` Page produced a real `external_interactions` row.
 
-Evidence (real Meta event, 2026-09-18 20:33 UTC):
+Evidence from the real Meta event on 2026-09-18 20:33 UTC:
 
-```
-webhook_events:        external_object_id = '1287488901121523'
-                       status              = 'PROCESSED'
-external_interactions: interaction_type    = 'COMMENT'
-                       external_id         = '122094187437489537_1582353133389249'
-                       content             = 'This is the very first comment on Content Platform.'
-worker log:            [webhook.process] event 87f0c082-... processed: 1 interactions
+```text
+webhook_events:
+  external_object_id = '1287488901121523'
+  status             = 'PROCESSED'
+
+external_interactions:
+  interaction_type = 'COMMENT'
+  external_id      = '122094187437489537_1582353133389249'
+  content          = 'This is the very first comment on Content Platform.'
+
+worker:
+  [webhook.process] event 87f0c082-... processed: 1 interactions
 ```
 
-The `feed` field with `item: 'status'` (Page's own post creation) is
-correctly skipped — `FeedChangeExtractor` only materializes `comment`,
-`reaction`, and `mention`. Verified by:
+The `feed` field with `item: 'status'` representing the Page's own post
+creation is correctly skipped. `FeedChangeExtractor` materializes only
+`comment`, `reaction`, and `mention` changes.
 
-```
+```text
 [webhook.process] event 35e49212-... processed: 0 interactions   (status)
 [webhook.process] event 87f0c082-... processed: 1 interactions   (comment)
 ```
@@ -102,32 +226,48 @@ correctly skipped — `FeedChangeExtractor` only materializes `comment`,
 
 ## Meta App configuration (recorded for continuity)
 
-| Item                    | Value                                                |
-| ----------------------- | ---------------------------------------------------- |
-| Meta App ID             | `915404831335846`                                    |
-| Meta App Mode           | **Live**                                             |
-| Business portfolio ID   | `1416443380591994`                                   |
-| Business portfolio name | `Content Platform`                                   |
-| Page ID (Facebook)      | `1287488901121523`                                   |
-| Page username           | `contentplatform.dev`                                |
-| System User             | `contentplatform-bot` (`61594178114698`)             |
-| Subscribed fields       | `feed`, `mention`                                    |
-| Verify token            | `content-platform-verify-2026`                       |
-| Ngrok URL (current)     | `https://uncanny-reappoint-unaligned.ngrok-free.dev` |
+---
 
-Database records created during Phase 18a E2E:
+Item Value
 
-| Table                      | ID                                     |
-| -------------------------- | -------------------------------------- |
-| `destinations.id`          | `51eb5e79-b6a5-4f51-86bb-23dd81e9167e` |
-| `webhook_subscriptions.id` | `2bc850b3-3e93-45d7-98cd-45e07a2daf00` |
+---
+
+Meta App ID `915404831335846`
+
+Meta App Mode **Live**
+
+Business portfolio ID `1416443380591994`
+
+Business portfolio name `Content Platform`
+
+Page ID (Facebook) `1287488901121523`
+
+Page username `contentplatform.dev`
+
+System User `contentplatform-bot` (`61594178114698`)
+
+Subscribed fields `feed`, `mention`
+
+Verify token `content-platform-verify-2026`
+
+Ngrok URL (recorded) `https://uncanny-reappoint-unaligned.ngrok-free.dev`
+------------------------------------------------------------------------------------------
+
+Database records created during the Phase 18a E2E test:
+
+Table ID
+
+---
+
+`destinations.id` `51eb5e79-b6a5-4f51-86bb-23dd81e9167e`
+`webhook_subscriptions.id` `2bc850b3-3e93-45d7-98cd-45e07a2daf00`
 
 **Security note:** the Meta App Secret and the ngrok authtoken appeared
 in the development chat during setup. Rotate both before any external
-collaboration:
+collaboration.
 
-- App Secret: `developers.facebook.com/apps/915404831335846/settings/basic/` → Reset
-- Ngrok token: `dashboard.ngrok.com/get-started/your-authtoken` → Regenerate
+- App Secret: Meta App → Settings → Basic → Reset.
+- Ngrok token: regenerate from the ngrok dashboard.
 
 The System User token is stored only in the browser session and is not
 committed to the repository.
@@ -140,471 +280,665 @@ committed to the repository.
 
 Six workspace packages:
 
-| Package                         | Purpose                                                               | Tests                      |
-| ------------------------------- | --------------------------------------------------------------------- | -------------------------- |
-| `packages/database`             | Drizzle schema, migrations, 13 repositories, TransactionManager       | 22 (skipped)               |
-| `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                  | 24 (13 skipped)            |
-| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                | 21                         |
-| `packages/publishers`           | MetaInteractionAdapter, MetaResponseReconciler, NoopMetaRateLimiter   | 16                         |
-| `apps/worker`                   | OutboxDispatcher, webhook.process, webhook.respond, reconcile workers | 38 (8 skipped)             |
-| `apps/api`                      | Fastify webhook ingress (POST + GET)                                  | 4 (skipped)                |
-| **Total**                       |                                                                       | **99 passed / 47 skipped** |
+---
+
+Package Purpose Tests
+
+---
+
+`packages/database` Drizzle schema, migrations, 22
+repositories,  
+TransactionManager
+
+`packages/authentication` AES-256-GCM, 37
+MetaCredentialService, Graph
+API client
+
+`packages/interaction-response` Policy engine, template 21
+renderer (pure,  
+deterministic)
+
+`packages/publishers` MetaInteractionAdapter, 51
+MetaPublisherAdapter,  
+MetaResponseReconciler,  
+MetaPublicationReconciler,  
+NoopMetaRateLimiter
+
+`apps/worker` OutboxDispatcher, 68
+webhook.process,  
+webhook.respond,  
+content.publish,  
+publication.reconcile  
+workers
+
+`apps/api` Fastify webhook ingress 4
+(POST + GET)
+
+**Total** **203**
+-------------------------------------------------------------------------------------------
+
+The 203-test verification is recorded with `TEST_DATABASE_URL` and
+`TEST_REDIS_URL` available. The earlier pre-Phase-19c run was 99 passed,
+0 failed, and 47 skipped because the database-backed tests were not
+enabled.
 
 ### Database schema
 
-- **44 tables** implementing DB v1.2 (`DATABASE_SCHEMA_CONTRACT.md`)
-- **14 migrations** (`0000` – `0013`), applied to Neon PostgreSQL
-- `pgcrypto` extension registered in `0000`, never re-declared
-- Partial index `publications(external_post_id) WHERE ... IS NOT NULL`
-- Partial unique index `provider_credentials_unique` with `COALESCE`
-- Deferred FK `external_interactions.publication_id` → `publications.id`
+- **44 tables** implementing DB v1.2.
+- **14 migrations** (`0000` -- `0013`), applied to Neon PostgreSQL.
+- `pgcrypto` extension registered in `0000`, never re-declared.
+- Partial index
+  `publications(external_post_id) WHERE ... IS NOT NULL`.
+- Partial unique index `provider_credentials_unique` with `COALESCE`.
+- Deferred FK `external_interactions.publication_id` →
+  `publications.id`.
 
-### Repositories implemented (13)
+### Repositories implemented
 
-- `OutboxRepository` — with `FOR UPDATE SKIP LOCKED` two-step claim
-- `WebhookSubscriptionsRepository`
-- `WebhookSubscriptionHealthRepository`
-- `WebhookEventsRepository` — idempotent insert via `ON CONFLICT DO NOTHING`
-- `WebhookDeliveriesRepository`
-- `ExternalInteractionsRepository` — monotonic upsert with `occurred_at`
-- `ProviderCredentialsRepository` — with partial unique index
-- `PublicationsRepository`
-- `DestinationsRepository`
-- `InteractionResponsesRepository` — includes `claimForResponding` and `findByDestinationAndExternalResponseId`
-- `InteractionResponseAttemptsRepository`
-- `InteractionModerationActionsRepository`
-- `InteractionResponseReconciliationsRepository`
+There are **15 repository classes** currently exported by
+`packages/database/src/repositories/index.ts`.
 
-Integration tests exist for every repository that has a write path:
-`OutboxRepository`, `WebhookEventsRepository`,
-`ExternalInteractionsRepository`, `ProviderCredentialsRepository`.
-They run when `TEST_DATABASE_URL` is set.
+#### Webhook / outbox / destination
+
+- `OutboxRepository` --- `FOR UPDATE SKIP LOCKED` two-step claim.
+- `WebhookSubscriptionsRepository`.
+- `WebhookSubscriptionHealthRepository`.
+- `WebhookEventsRepository` --- idempotent insert with
+  `ON CONFLICT DO NOTHING`.
+- `WebhookDeliveriesRepository`.
+- `ExternalInteractionsRepository` --- monotonic upsert on
+  `occurred_at`.
+- `DestinationsRepository`.
+
+#### Publication lifecycle
+
+- `PublicationsRepository` --- includes lookup by external post ID and
+  destination.
+- `PublicationAttemptsRepository`.
+- `PublicationReconciliationsRepository`.
+
+#### Credentials
+
+- `ProviderCredentialsRepository` --- protected by the partial unique
+  index.
+
+#### Interaction response lifecycle
+
+- `InteractionResponsesRepository` --- includes `claimForResponding`
+  and `findByDestinationAndExternalResponseId`.
+- `InteractionResponseAttemptsRepository`.
+- `InteractionModerationActionsRepository`.
+- `InteractionResponseReconciliationsRepository`.
+
+All repository integration tests with a database dependency run against
+Neon PostgreSQL when `TEST_DATABASE_URL` is configured.
 
 ### Platform primitives
 
-- `createDatabaseClient` — factory with health check and graceful shutdown
-- `TransactionManager` — the `run(fn)` API
-- `OutboxRepository.enqueue(tx, job)` — the transactional outbox entry point
-- `OutboxDispatcher` — PG → BullMQ bridge with stale recovery + cleanup
-- `BullMqJobQueue` — BullMQ `Queue` abstraction (`JobQueue` interface),
-  **per-queue** `Queue` instances keyed by the logical queue name
-- `BullMqJobConsumer` — BullMQ `Worker` abstraction (`JobConsumer` interface)
-- `redisOptionsFromUrl` — URL → `RedisOptions` parser with TLS auto-detection
-- `WebhookProcessService` — parse + materialize webhook events into interactions
-- `ChangeExtractorRegistry` — field-specific extractors (`feed`, `mention`)
-- `InteractionResponseService` — policy engine + template renderer + moderation gate + outbox enqueue
-- `WebhookRespondService` — atomic claim + Graph API call + status transitions
-- `WebhookRespondReconcileService` — pull reconciliation via parent comment replies
-- `MetaInteractionAdapter` — Graph API POST with error classification
-- `MetaResponseReconciler` — Graph API GET with body matching
-- `MetaGraphBridge` — HTTP bridge for both POST and GET
-- `MetaCredentialService` — store / rotate / invalidate / validate / healthCheck
-- `MetaErrorMapper` — Graph API error categorization
-- `CredentialEncryptionProvider` — AES-256-GCM with AAD binding and key rotation
+- `createDatabaseClient` --- database factory with health check and
+  graceful shutdown.
+- `TransactionManager` --- `run(fn)` transactional API.
+- `OutboxRepository.enqueue(tx, job)` --- transactional outbox entry
+  point.
+- `OutboxDispatcher` --- PostgreSQL → BullMQ bridge with stale
+  recovery and cleanup.
+- `BullMqJobQueue` --- per-queue BullMQ `Queue` instances keyed by
+  logical queue name.
+- `BullMqJobConsumer` --- BullMQ `Worker` wrapper, exported as
+  `JobConsumer`.
+- `redisOptionsFromUrl` --- URL → `RedisOptions`, including TLS
+  auto-detection and `family: 4` for Windows + Upstash compatibility.
+- `sql` re-exported from `@content-platform/database`, keeping the
+  `drizzle-orm` peer-resolution boundary inside the database package.
+- `WebhookProcessService` --- parse and materialize webhook events.
+- `ChangeExtractorRegistry` --- field-specific `feed` and `mention`
+  extractors.
+- `InteractionResponseService` --- policy + template + moderation
+  gate + transactional outbox enqueue.
+- `WebhookRespondService` --- atomic claim, Graph API call, and state
+  transitions.
+- `WebhookRespondReconcileService` --- pull reconciliation for
+  interaction responses.
+- `MetaInteractionAdapter` --- Graph API POST with error
+  classification.
+- `MetaResponseReconciler` --- Graph API GET with response-body
+  matching.
+- `MetaPublisherAdapter` --- outbound Page publication adapter.
+- `MetaPublicationReconciler` --- outbound publication pull
+  reconciler.
+- `MetaGraphBridge` --- worker-side HTTP bridge for Graph API POST and
+  GET.
+- `ContentPublishService` --- durable publication execution service.
+- `ContentPublishWorker` --- `content.publish` queue consumer.
+- `PublicationReconcileService` --- publication pull-reconciliation
+  service.
+- `PublicationReconcileWorker` --- `publication.reconcile` queue
+  consumer.
+- `MetaCredentialService` --- credential store, rotation,
+  invalidation, validation, and health checks.
+- `MetaErrorMapper` --- Graph API error categorization.
+- `CredentialEncryptionProvider` --- AES-256-GCM with AAD binding and
+  key rotation.
 
-### Webhook inbound pipeline — COMPLETE
+### Webhook inbound pipeline --- COMPLETE
+
+The inbound webhook path is complete:
+
+```text
+Meta POST (HTTPS)
+  → apps/api POST /api/v1/webhooks/meta
+      1. Raw body buffer
+      2. HMAC-SHA256 signature verification
+      3. Zod envelope validation
+      4. Destination resolution from entry[0].id
+      5. Single PostgreSQL transaction
+           webhook_events
+           outbox_jobs(queue_name = 'webhook.process')
+      6. HTTP 200 OK
+  → OutboxDispatcher
+  → BullMQ webhook.process
+  → WebhookProcessWorker
+  → WebhookProcessService
+  → external_interactions
+  → InteractionResponseService
+```
 
 The `GET /api/v1/webhooks/meta` handshake is also implemented:
 
-1. `hub.mode` must be `subscribe`, `hub.verify_token` and `hub.challenge` required
-2. Iterates all `webhook_subscriptions` rows where `provider = 'META' AND status = 'ACTIVE'`
-3. For each row, decrypts `verify_token_encrypted` with `WEBHOOK_TOKEN_ENCRYPTION_KEY`
-4. AAD: `META:${destination_id}`
-5. Ciphertext format: `v1:base64(iv ‖ ciphertext ‖ tag)` — AES-256-GCM
-6. On match: updates `last_verified_at`, returns `hub.challenge` as plain text
-7. On mismatch: HTTP 403
+1.  `hub.mode` must be `subscribe`; `hub.verify_token` and
+    `hub.challenge` are required.
+2.  All active META webhook subscriptions are checked.
+3.  `verify_token_encrypted` is decrypted using
+    `WEBHOOK_TOKEN_ENCRYPTION_KEY`.
+4.  AAD is `META:${destination_id}`.
+5.  Ciphertext format is `v1:base64(iv ‖ ciphertext ‖ tag)` using
+    AES-256-GCM.
+6.  On match, `last_verified_at` is updated and `hub.challenge` is
+    returned as plain text.
+7.  On mismatch, HTTP 403 is returned.
 
-### `apps/worker/src/index.ts` — what it starts
+### Outbound publication pipeline --- execution + reconciliation complete;
 
-- `OutboxDispatcher` — the PG → BullMQ bridge (Phase 16)
-- `WebhookProcessWorker` — the `webhook.process` queue consumer (Phase 17+18a)
-- `WebhookRespondWorker` — the `webhook.respond` queue consumer (Phase 18b)
-- `WebhookRespondReconcileWorker` — the `webhook.respond.reconcile` queue consumer (Phase 18b)
-- Graceful shutdown on `SIGINT` / `SIGTERM` (workers → dispatcher → queue → db)
+### scheduling not yet implemented
 
-### `apps/api` — routes
+The execution/reconciliation layer is complete. The missing orchestration
+layer is `PublicationScheduler` (Phase 19d), which is responsible only
+for discovering due/stale durable state and atomically creating the
+corresponding outbox work.
 
-| Method | Path                    | Purpose                                   |
-| ------ | ----------------------- | ----------------------------------------- |
-| GET    | `/health`               | Liveness                                  |
-| GET    | `/ready`                | Readiness with DB health check            |
-| POST   | `/api/v1/webhooks/meta` | Webhook ingress (signature + tx + outbox) |
-| GET    | `/api/v1/webhooks/meta` | Meta `hub.challenge` handshake            |
+```text
+publications
+   ↓
+[PublicationScheduler — NOT YET IMPLEMENTED]
+   ↓
+outbox_jobs (queue_name = 'content.publish')
+   ↓
+OutboxDispatcher
+   ↓
+BullMQ content.publish
+   ↓
+ContentPublishWorker
+   ↓
+ContentPublishService
+   ↓
+MetaPublisherAdapter
+   ↓
+Meta Graph API
+   ↓
+publications.status =
+   PUBLISHED | RETRY | FAILED | RECONCILIATION
+
+RECONCILIATION
+   ↓
+[PublicationScheduler — NOT YET IMPLEMENTED]
+   ↓
+outbox_jobs (queue_name = 'publication.reconcile')
+   ↓
+BullMQ publication.reconcile
+   ↓
+PublicationReconcileWorker
+   ↓
+PublicationReconcileService
+   ↓
+MetaPublicationReconciler
+   ↓
+Meta Graph API feed lookup
+   ↓
+PUBLISHED | RETRY | RECONCILIATION
+```
+
+Every execution and reconciliation worker/service is implemented. The
+missing component is the scheduler that moves due or stale rows from the
+`publications` table into the corresponding outbox queues.
+
+### Interaction response lifecycle --- COMPLETE
+
+The interaction-response state machine and its worker/reconciliation
+path are implemented. `AUTO_RESPOND` decisions enqueue `webhook.respond`
+through the transactional outbox. `UNKNOWN` external outcomes are
+handled through the dedicated reconciliation path.
+
+### `apps/worker/src/index.ts` --- what it starts
+
+- `OutboxDispatcher`.
+- `WebhookProcessWorker` --- `webhook.process`.
+- `WebhookRespondWorker` --- `webhook.respond`.
+- `WebhookRespondReconcileWorker` --- `webhook.respond.reconcile`.
+- `ContentPublishWorker` --- `content.publish`.
+- `PublicationReconcileWorker` --- `publication.reconcile`.
+- Graceful shutdown in dependency order:
+  `publication.reconcile → content.publish →   webhook.respond.reconcile → webhook.respond → webhook.process →   dispatcher → queue → db`.
+
+### `apps/api` --- routes
+
+---
+
+Method Path Purpose
+
+---
+
+GET `/health` Liveness
+
+GET `/ready` Readiness with DB
+health check
+
+POST `/api/v1/webhooks/meta` Webhook ingress
+(signature +
+transaction + outbox)
+
+GET `/api/v1/webhooks/meta` Meta `hub.challenge`
+handshake
+-------------------------------------------------------------------------
 
 ### Cloud services
 
-| Service       | Provider | Region       | URL scheme      |
-| ------------- | -------- | ------------ | --------------- |
-| PostgreSQL 16 | Neon     | eu-central-1 | `postgresql://` |
-| Redis 7 (TLS) | Upstash  | eu-central-1 | `rediss://`     |
+Service Provider Region URL scheme
 
-**No local Docker.** The development machine runs Windows 10 1607
-(build 14393) with 4 GB RAM. Docker Desktop requires Win 10 22H2
-(build 19045) and 8 GB RAM. Cloud services are the supported
-development path. `docker-compose.yml` is retained in the repository
-as a reference for future environments.
+---
+
+PostgreSQL 16 Neon eu-central-1 `postgresql://`
+Redis 7 (TLS) Upstash eu-central-1 `rediss://`
+
+**No local Docker.** The development machine runs Windows 10 1607 (build 14393) with 4 GB RAM. Docker Desktop requires Windows 10 22H2 (build 19045) and 8 GB RAM. Cloud services are therefore the supported
+development path. `docker-compose.yml` is retained as a reference for
+future environments.
 
 ### Toolchain
 
-- Node.js **22.20.0** (pinned in `.nvmrc`)
-- pnpm **12.3.4** (pinned via `packageManager`)
-- TypeScript **7.0.2** (pinned in `package.json` and `pnpm-workspace.yaml`)
-- Drizzle ORM **0.45.2**, Drizzle Kit **0.31.10**
-- BullMQ **5.34.0**, ioredis **5.4.2** (pinned in `pnpm-workspace.yaml`)
-- Fastify **5.2.0**, Zod **3.24.1** (pinned in `apps/api/package.json`)
-- Vitest **5.0.0**
-- ESLint **10.10.0**, Prettier **3.9.6**
+- Node.js **22.20.0** (pinned in `.nvmrc`).
+- pnpm **12.3.4** (pinned via `packageManager`).
+- TypeScript **7.0.2** (pinned in `package.json` and
+  `pnpm-workspace.yaml`).
+- Drizzle ORM **0.45.2**, Drizzle Kit **0.31.10**.
+- BullMQ **5.34.0**, ioredis **5.4.2**.
+- Fastify **5.2.0**, Zod **3.24.1**.
+- Vitest **5.0.0**.
+- ESLint **10.10.0**, Prettier **3.9.6**.
 
 ### Documentation
 
-- `README.md` — project overview
-- `HANDOFF.md` — this file
-- `docs/README.md` — documentation index
-- `docs/adr/` — Architecture Decision Records (index, template, 5 entries)
+- `README.md`
+- `HANDOFF.md` --- this file
+- `docs/README.md`
+- `docs/adr/` --- Architecture Decision Records
 - `docs/architecture/README.md`
 - `docs/architecture/system-overview.md`
 - `docs/architecture/domain-model.md`
 - `docs/architecture/data-model.md`
-- `docs/conventions/` — commits, TypeScript, database, migrations
+- `docs/architecture/TECHNICAL_SPECIFICATION.md`
+- `docs/architecture/DATABASE_SCHEMA_CONTRACT.md`
+- `docs/architecture/LOGICAL_MODEL_SPECIFICATION.md` --- status
+  unconfirmed
+- `docs/conventions/`
 - `docs/operations/README.md`
 - `docs/operations/local-development.md`
-
-Top-level specification documents in the repository root:
-
-- `TECHNICAL_SPECIFICATION.md` v0.9.0 — committed (`e1f95c4`)
-- `DATABASE_SCHEMA_CONTRACT.md` v1.2 — committed (`c954ef3`)
-- `LOGICAL_MODEL_SPECIFICATION.md` — **status unconfirmed**
+- `docs/operations/meta-app-setup.md`
 
 ---
 
 ## Pending items
 
-### 1. Meta App Secret and ngrok authtoken rotation
+### 1. PublicationScheduler --- Phase 19d
 
-Both appeared in the development chat. Rotate before any external
-collaboration.
+Two scheduler scans are required to complete the outbound execution
+loop:
 
-### 2. `LOGICAL_MODEL_SPECIFICATION.md`
+1.  Find `SCHEDULED` publications with `scheduled_at <= now()` and
+    enqueue `content.publish` through `outbox_jobs`.
+2.  Find stale `RECONCILIATION` publications whose `updated_at` is older
+    than the reconciliation threshold and enqueue
+    `publication.reconcile` through `outbox_jobs`.
 
-Confirm presence in the repository root. The `README.md` links to it.
+Both scans must execute their durable state transition and outbox
+enqueue inside one PostgreSQL transaction with an optimistic status
+guard so that multiple scheduler executions cannot enqueue the same
+publication concurrently.
 
-### 3. Ngrok URL is ephemeral
+The intended scheduling mechanism is a `system.publication.schedule` job
+with a cron-like cadence or an equivalent controlled polling mechanism.
 
-The free ngrok URL changes on every restart. Meta's Webhooks → Page
-configuration and the Webhook fields test both use this URL. Each
-restart requires updating the Callback URL in the Meta dashboard.
+### 2. Real outbound E2E
 
-For long-running development, consider a paid ngrok plan with a static
-domain, or deploy `apps/api` behind a public HTTPS endpoint.
+The outbound `content.publish` pipeline has not yet been verified
+against the real Meta Graph API. After Phase 19d provides scheduling,
+run a real publication against the `contentplatform.dev` Page and
+verify:
 
-### 4. Integration tests have never been executed
+- publication execution through `MetaPublisherAdapter`;
+- durable `PUBLISHED` transition;
+- push reconciliation of the resulting Page feed webhook;
+- pull reconciliation for an uncertain publication outcome.
 
-The following DB-backed integration test files are skipped when
-`TEST_DATABASE_URL` is not set:
-
-- `packages/database/src/repositories/outbox-repository.test.ts`
-- `packages/database/src/repositories/webhook-events-repository.test.ts`
-- `packages/database/src/repositories/external-interactions-repository.test.ts`
-- `packages/database/src/repositories/provider-credentials-repository.test.ts`
-- `packages/authentication/src/meta/meta-credential-service.test.ts`
-- `apps/worker/src/webhook/webhook-process-service.test.ts`
-- `apps/worker/src/outbox-dispatcher.test.ts`
-- `apps/api/src/routes/webhooks/meta.test.ts`
-
-Set `TEST_DATABASE_URL` in `.env` to enable the 47 skipped tests.
-
-### 5. Temporary credential shortcut
-
-The worker reads `META_PAGE_ACCESS_TOKEN` from the environment. This
-bypasses `MetaCredentialService` (the DB-backed, encrypted credential
-store). When unset, every response fails with `AUTHENTICATION_ERROR`.
-The DB-backed wiring is a later phase.
-
-### 6. Interaction response configuration
+### 3. Interaction response configuration
 
 `apps/worker/src/index.ts` currently uses:
 
-- `DEFAULT_INTERACTION_RESPONSE_CONFIG` — empty rule set (fail-closed,
-  every comment defers to human moderation)
-- `DEFAULT_TEMPLATES` — empty map
+- `DEFAULT_INTERACTION_RESPONSE_CONFIG` --- empty rule set,
+  fail-closed;
+- `DEFAULT_TEMPLATES` --- empty map.
 
-Real values must be loaded from `system_config` under
-`interaction_response_rules` and `interaction_response_templates`.
+Real configuration must eventually be loaded from `system_config` under:
 
-### 7. `destinations.trust_level`
+- `interaction_response_rules`;
+- `interaction_response_templates`.
 
-The destinations schema has no `trust_level` column. The worker uses
-`DEFAULT_TRUST_LEVEL = 'MEDIUM'` as a constant. A dedicated column can
-be added when the reputation subsystem defines the source.
+### 4. Temporary Meta credential shortcut
+
+The worker currently obtains the Meta Page access token from
+`META_PAGE_ACCESS_TOKEN`. This bypasses the DB-backed encrypted
+`MetaCredentialService` path for worker Graph API calls.
+
+The encrypted credential lifecycle exists, but the worker-side
+publishing, interaction-response, and publication-reconciliation wiring
+still use the environment token shortcut.
+
+### 5. `destinations.trust_level`
+
+The current database schema does not contain a `trust_level` column. The
+interaction policy path therefore uses its configured/default trust
+level as an application value. A dedicated database column should only
+be introduced when the reputation subsystem defines the authoritative
+source.
+
+### 6. `LOGICAL_MODEL_SPECIFICATION.md`
+
+The documentation references
+`docs/architecture/LOGICAL_MODEL_SPECIFICATION.md`. Its presence and
+version/status should be explicitly verified before treating the logical
+model as confirmed.
+
+### 7. Meta App Secret and ngrok authtoken rotation
+
+Both secrets appeared in the development chat during the Meta E2E setup.
+They must be rotated before external collaboration or broader credential
+distribution.
+
+### 8. Ngrok URL is ephemeral
+
+The recorded free ngrok URL changes when the tunnel is restarted. The
+Meta Webhook callback configuration therefore has to be updated after a
+restart. For stable long-running development, use a fixed public HTTPS
+endpoint or a static ngrok domain.
 
 ---
 
 ## Next steps
 
-### Option A — Phase 19: Meta publisher adapter
+### Phase 19d --- PublicationScheduler
 
-Implement `packages/publishers/src/meta/meta-publisher-adapter.ts`:
+Phase 19c is complete. Phase 19d adds only the missing scheduling and
+orchestration layer on top of the already implemented publication
+execution/reconciliation services.
 
-- `postToPage(input)` — POST /{page-id}/feed
-- `reconcile(postId)` — GET /{post-id}
-- Rate limiter integration
+Implement:
 
-Requires:
+- `apps/worker/src/publication/publication-scheduler-service.ts`
+- `apps/worker/src/publication/publication-scheduler-worker.ts`
 
-- `PublicationService` (durable intent + attempts + reconciliation)
-- `content.publish` worker
-- `publication.reconcile` worker
+Required behavior:
 
-### Option B — Integration tests + first live E2E
+- scan `publications` for due `SCHEDULED` rows;
+- scan for stale `RECONCILIATION` rows;
+- enqueue `content.publish` and `publication.reconcile` through
+  `outbox_jobs`;
+- perform the row state transition and outbox insertion in one
+  transaction;
+- use optimistic guards for idempotent scheduling;
+- register the scheduler worker in `apps/worker/src/index.ts`;
+- provide the `system.publication.schedule` scheduling mechanism.
 
-Set `TEST_DATABASE_URL` in `.env`, run `pnpm test` against Neon. The current suite has 99 passed and 47 DB-dependent tests skipped. Then re-run the E2E Meta test from Phase 18a to
-verify the full inbound pipeline now also triggers the interaction
-response service (with empty rule set → MODERATION_REQUIRED row).
+### Phase 20 --- Real E2E verification and production readiness
 
-### Option C — system_config-driven configuration
+After scheduling exists:
 
-Load `interaction_response_rules` and `interaction_response_templates`
-from `system_config` in the worker startup. Add a `ConfigService` cache
-(short TTL, invalidated on `last_rotation_at` change).
-
-### Option D — Moderation UI
-
-Add moderation endpoints in `apps/api` for the
-`MODERATION_REQUIRED` queue (`findModerationPending`) and moderation
-actions (`interaction_moderation_actions`).
-
-### Option E — Staging VPS deployment
-
-Deploy `apps/api` + `apps/worker` to a staging VPS to remove the ngrok
-dependency. This makes the Meta integration stable and lets future
-phases be developed against a fixed webhook URL.
+1.  Run a real publication through the complete outbound chain.
+2.  Verify the publication state transition against the real Meta Graph
+    API.
+3.  Verify push reconciliation through the existing Meta feed webhook.
+4.  Verify pull reconciliation for uncertain publication outcomes.
+5.  Audit and update the operational runbooks in `docs/operations/`.
 
 ---
 
 ## Architectural invariants (must not be violated)
 
-1. PostgreSQL is the authoritative system of record.
-2. Redis/BullMQ is the asynchronous execution layer.
-3. Every durable domain transition that produces a side effect enqueues
-   through `outbox_jobs` in the same PostgreSQL transaction.
-4. No direct BullMQ enqueue is permitted on a durable-write hot path.
-5. The webhook ingress performs exactly one database transaction per
-   HTTP request and no Redis call on the hot path.
-6. Provider credentials are encrypted at rest with application-managed
-   keys. No plaintext secret is persisted in any ordinary application
-   table.
-7. `outbox_jobs` has no foreign keys.
-8. Reconciliation is mandatory for every state machine that has an
-   external side effect.
-9. The system fails closed when mandatory validation cannot be completed.
+1.  PostgreSQL is the authoritative system of record.
+2.  Redis/BullMQ is the asynchronous execution layer.
+3.  Every durable domain transition that produces a side effect enqueues
+    through `outbox_jobs` in the same PostgreSQL transaction.
+4.  No direct BullMQ enqueue is permitted on a durable-write hot path.
+5.  The webhook ingress performs exactly one database transaction per
+    HTTP request and no Redis call on the hot path.
+6.  Provider credentials are encrypted at rest with application-managed
+    keys. No plaintext secret is persisted in any ordinary application
+    table.
+7.  `outbox_jobs` has no foreign keys.
+8.  Reconciliation is mandatory for every state machine that has an
+    external side effect.
+9.  The system fails closed when mandatory validation cannot be
+    completed.
+10. Publication reconciliation must remain separate from interaction
+    response reconciliation at the domain/service boundary.
+11. The publisher adapter is not the application foundation;
+    provider-specific code remains behind narrow publisher/interaction
+    interfaces.
 
 ---
 
 ## Known patterns and traps
 
-These are lessons learned during Phases 14–18b. They are captured here so
-that the next session does not re-encounter them.
+These are lessons learned during Phases 14--19c. They are captured here
+so the next session does not re-encounter them.
+
+### `GraphClient` / `GraphPostClient` compatibility alias
+
+The authentication/Graph client surface uses `GraphClient` as the
+canonical abstraction. Where older worker-side terminology refers to
+`GraphPostClient`, it is a compatibility alias, not a second Graph API
+interface:
+
+```typescript
+export type GraphPostClient = GraphClient;
+```
+
+Do not introduce a parallel interface merely to preserve the older name.
+The canonical implementation and behavior remain those of `GraphClient`.
+
+### Stale workspace `dist/*.d.ts` can hide source changes
+
+The worker consumes workspace packages through their package exports,
+which may resolve to generated `dist` declarations. Therefore a source
+file can contain a newly exported type or method while the worker still
+sees an older declaration file.
+
+When TypeScript reports that an existing workspace export or method is
+missing, first rebuild the producing workspace packages:
+
+```text
+pnpm build
+```
+
+Only after the generated declarations are current should the error be
+treated as a real source-level or architectural defect.
+
+This is especially relevant to repository barrels and cross-package
+worker imports.
+
+### Direct `drizzle-orm` imports in workers change the dependency boundary
+
+The current worker boundary intentionally obtains Drizzle helpers such
+as `sql` through `@content-platform/database`. This keeps
+`drizzle-orm` ownership at the database package boundary.
+
+If worker source code directly imports from `drizzle-orm`, that is no
+longer an incidental transitive dependency: `drizzle-orm` becomes a
+direct worker dependency and the workspace package manifest must declare
+it explicitly.
+
+Prefer the existing database-package export when the worker only needs
+the already-established database abstraction. Do not add a duplicate
+worker dependency merely to compensate for a stale declaration or barrel
+export.
 
 ### `RETURNING *` in raw SQL returns snake_case
 
-Every raw SQL query with `RETURNING *` returns snake_case column names,
-which do **not** match the Drizzle `$inferSelect` type. Two correct
-patterns:
+Every raw SQL query with `RETURNING *` returns snake_case column names
+that do not match the Drizzle `$inferSelect` type.
 
-1. `RETURNING id` in raw SQL, then a Drizzle `SELECT` for the full row.
-   Used by `OutboxRepository.claimPendingBatch` and
-   `ProviderCredentialsRepository.upsert`.
-2. Explicit `RETURNING id AS "id", col AS "camelCase"` aliases. Used by
-   `ExternalInteractionsRepository.upsertMonotonic`.
+Two correct patterns:
 
-Never cast a `RETURNING *` result to a camelCase type. This bug appeared
-three times (external-interactions, provider-credentials, outbox-claim)
-before the two-pattern convention was established.
+1.  `RETURNING id` in raw SQL, then a Drizzle `SELECT` for the full row.
+2.  Explicit `RETURNING id AS "id", col AS "camelCase"` aliases.
+
+Never cast a `RETURNING *` result directly to a camelCase type.
 
 ### `ioredis` URL constructor overload
 
 `ioredis` 5.x does not accept `(url: string, options)`. URLs must be
-parsed into `RedisOptions` via `redisOptionsFromUrl`. The parser also
-detects Upstash (`*.upstash.io`) hostnames and enables TLS
-automatically, because Upstash's `redis-cli` copy-paste format uses
-`redis://` even when TLS is required. The `rediss://` scheme also
-enables TLS. The parser additionally forces `family: 4` (Windows
-dual-stack can try IPv6 first, which Upstash rejects) and sets
-`servername` for SNI.
+parsed into `RedisOptions` through `redisOptionsFromUrl`.
 
-### Vitest aliases
+The parser:
 
-Each package's `vitest.config.ts` aliases `@content-platform/database`
-to `packages/database/src/index.ts`. This ensures tests always run
-against the latest source, not a stale `dist/`. Without the alias,
-edits to a database repository are not visible to the worker tests
-until `pnpm build` is run.
+- enables TLS for Upstash hosts and `rediss://`;
+- forces `family: 4` for Windows dual-stack compatibility;
+- sets `servername` for SNI.
 
-### `pnpm postinstall` vs `prepare`
+### pnpm peer resolution --- keep the current Drizzle boundary
 
-- `postinstall`: `pnpm -r --if-present run build` — runs on fresh
-  installs, new dependencies, lockfile changes.
-- `prepare`: `husky || true` — runs on root `pnpm install`.
+`drizzle-orm` has a peer dependency on `postgres`. The current worker
+does not depend on `drizzle-orm` directly; the `sql` template tag is
+re-exported from `@content-platform/database`, keeping the database
+abstraction boundary in one place.
 
-`rm -rf dist && pnpm install` does **not** trigger `postinstall`,
-because the dependency graph is unchanged. Use `pnpm build` to rebuild
-manually. This is a pnpm 10+ optimization, not a bug.
+Do not add a direct worker dependency just because an old generated
+declaration is missing an export. Rebuild first. A direct
+`drizzle-orm` import is appropriate only when the worker genuinely
+needs to consume Drizzle directly; in that case it must be declared as
+a direct dependency of the worker package.
 
-### Vitest `fileParallelism: false`
+### `exactOptionalPropertyTypes` and conditional spread
 
-Integration tests share a single PostgreSQL database and a single
-Redis instance. Running test files in parallel causes one file's
-`TRUNCATE ... CASCADE` to wipe another file's in-flight rows. Every
-workspace package's `vitest.config.ts` sets `fileParallelism: false`.
+With `exactOptionalPropertyTypes: true`, `field: undefined` is not
+assignable to `field?: string`.
 
-### pnpm `-r` runs packages in parallel — use `--workspace-concurrency=1`
+Use:
 
-Even with `fileParallelism: false` inside each package, `pnpm -r` still
-runs the _packages_ themselves in parallel. For tests that share a
-single PostgreSQL database (like this project), the root `test` script
-must be:
-
-```
-"test": "pnpm -r --workspace-concurrency=1 --if-present run test"
+```typescript
+...(field !== undefined && { field }),
 ```
 
-Without `--workspace-concurrency=1`, the `apps/api` and
-`packages/database` tests interfere via `TRUNCATE` on `webhook_events`
-and `outbox_jobs`.
-
-### `__dirname` in vitest configs
-
-Vite's upcoming native config loader does not support `__dirname`. Use
-`import.meta.dirname` instead. This is a warning today and will be a
-hard error in a future Vitest release.
+This pattern is used throughout the repositories and API webhook
+ingress.
 
 ### Fastify raw body for HMAC verification
 
 Fastify parses `application/json` into an object by default, losing the
-raw bytes needed for HMAC-SHA256 signature verification. The fix is a
-custom content-type parser:
+raw bytes needed for HMAC-SHA256 verification.
 
-```typescript
-app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
-  request.rawBody = body as Buffer;
-  try {
-    done(null, JSON.parse((body as Buffer).toString('utf8')));
-  } catch (err) {
-    done(err as Error, undefined);
-  }
-});
+Use a custom content-type parser with `parseAs: 'buffer'` and attach
+`request.rawBody` through a Fastify module augmentation. Never
+reconstruct the signed bytes from the parsed JSON object.
+
+### pnpm `-r` runs packages in parallel --- use `--workspace-concurrency=1`
+
+Integration tests share a PostgreSQL database and Redis instance. Even
+with `fileParallelism: false` inside each package, `pnpm -r` can run
+workspace packages concurrently.
+
+The root test script must use:
+
+```text
+"test": "pnpm -r --workspace-concurrency=1 --if-present run test"
 ```
 
-The `rawBody` is attached to the request via a `declare module 'fastify'`
-augmentation. Do not attempt to reconstruct the raw bytes from the parsed
-object — the signature will not match.
+### `__dirname` in Vitest configs
 
-### `exactOptionalPropertyTypes` and conditional spread
+Use `import.meta.dirname` instead of `__dirname` in Vitest
+configuration. The native config loader path is not compatible with the
+old pattern.
 
-With `exactOptionalPropertyTypes: true` (set in `tsconfig.base.json`),
-`field: undefined` is not assignable to `field?: string`. Use conditional
-spread to omit the property entirely:
+### `source .env` is unreliable in Git Bash
 
-```typescript
-await tx.insert(webhookEvents).values({
-  provider: 'META',
-  objectType: envelope.object,
-  // ... required fields ...
-  ...(field !== undefined && { field }),
-});
+The Neon and Upstash URLs can contain `&`, which Git Bash interprets as
+a background-job separator.
+
+Use a controlled export, for example:
+
+```bash
+export TEST_DATABASE_URL="$(grep '^TEST_DATABASE_URL=' .env | cut -d= -f2-)"
 ```
 
-This pattern is used in `apps/api/src/routes/webhooks/meta.ts` and in
-several database repositories.
+and export `TEST_REDIS_URL` similarly.
 
-### `pnpm build` must precede `pnpm typecheck` when a referenced package changes
+### Neon direct vs pooled connections
 
-The TypeScript project references read the referenced package's
-`dist/*.d.ts`. If a new method is added to `packages/database` and the
-`dist/` is stale, `pnpm typecheck` fails with "Property X does not exist
-on type Y". Always run `pnpm build` first.
+`drizzle-kit migrate` uses prepared statements and therefore must use
+the Neon **Direct connection** URL rather than the PgBouncer
+transaction-pool URL.
 
-### pnpm 12 does not relink `.bin` when a new workspace package is added
+Runtime application connections may use the pooled URL where
+appropriate.
 
-Adding `packages/publishers/package.json` (or any other new package)
-triggers `pnpm install`, but the `.bin/vitest` symlink inside the new
-package's `node_modules` is not created. The fix is `pnpm dedupe`,
-which forces the full link pass.
+### PostgreSQL identifier truncation --- NOTICE 42622
 
-### `InteractionResponseServiceDeps` must include `outboxRepo`
+Long PostgreSQL foreign-key identifiers can be truncated to the
+63-character identifier limit. This is informational when the generated
+migration is otherwise correct.
 
-The service enqueues a `webhook.respond` outbox job in the same
-transaction as the response insert. The dependency must be present in
-the interface, and every test/fake must supply it.
+### Publication reconciliation is bounded pull-based fallback
 
-### Push-reconciliation: `continue` after actor-match
+The publication reconciliation path is not the primary success path.
 
-In `WebhookProcessService`, when an interaction's `actorExternalId`
-equals the destination's `externalId`, this is the platform's own
-outbound reply coming back. **Never** run the policy decision for these
-interactions, whether or not a matching response record exists. Use
-`continue` to skip the rest of the inner loop body.
+The normal success path is:
 
-### Meta Test button sends dummy Page ID
-
-The Meta dashboard "Test" button sends `entry[0].id = "0"`, not the
-real Page ID. In Development mode this is the only webhook source. The
-ingress resolves destination from `entry[0].id`, so `"0"` never matches,
-and the event ends up `FAILED` with `UNKNOWN_DESTINATION`. To test the
-real path, the app must be in **Live mode** and events must come from
-real user actions.
-
-### Meta App must be in Live mode
-
-Development mode does not deliver real webhook events from any source,
-including app admins, developers, or testers. The Meta dashboard states
-this explicitly. To receive real events:
-
-1. Provide `Privacy Policy URL` — a public GitHub Gist works. Example:
-   create a public Gist with the Privacy Policy Markdown, then paste the
-   Gist URL into App Settings → Basic → Privacy Policy URL.
-2. Provide `App Icon` — 1024×1024 PNG with transparent background.
-   A PowerShell script that generates one is possible with
-   `System.Drawing.Bitmap` + `Format32bppArgb` + `Graphics.Clear(Transparent)`.
-3. Provide `Category` — e.g., `News and Media` or `Business and Pages`.
-4. Switch App Mode to **Live** via the Dashboard toggle.
-
-### Meta Business Suite System User
-
-For stable Page access independent of a personal Facebook account, use
-a **System User**:
-
-1. Business Suite → Settings → Users → System Users → Add.
-2. Role: Admin.
-3. On the System User details page, use **Assign Assets** to attach:
-   - **Pages** → target Page → Full Control
-   - **Apps** → Meta App → Full Control
-4. Generate token: App = Meta App, duration = 60 days, permissions
-   include `pages_manage_metadata`, `pages_read_engagement`,
-   `pages_show_list`.
-5. Use the resulting token directly in Graph API Explorer's **Access
-   Token** field. Do not use the "User or Page" dropdown — the System
-   User does not appear there.
-
-The System User pages in Business Suite are sometimes navigated by
-`?business_id=...&selected_user_id=...` URLs. If the URL does not load
-the correct page, use the left sidebar navigation instead:
-**Rendszerfelhasználók** → click the user's name.
-
-### `subscribed_apps` — GET vs POST
-
-- `GET /{page-id}/subscribed_apps` — lists apps the Page is subscribed to.
-- `POST /{page-id}/subscribed_apps?subscribed_fields=feed,mention` —
-  subscribes the App to the Page's fields. Returns `{"success": true}`.
-
-The Graph API Explorer's URL for POST is constructed as:
-
-```
-https://developers.facebook.com/tools/explorer/?method=POST&path=1287488901121523%2Fsubscribed_apps&version=v26.0&subscribed_fields=feed%2Cmention
+```text
+Meta Graph API response
+  → publication attempt result
+  → publications.status = PUBLISHED
 ```
 
-Setting the method to POST and clearing the URL query is often faster
-than using the UI dropdowns.
+When the external outcome is uncertain, the publication enters
+`RECONCILIATION` and the bounded pull reconciler investigates the
+destination Page feed. Independently, an inbound Meta feed webhook can
+provide push confirmation of the platform's own outbound publication.
+
+Therefore:
+
+- **primary confirmation:** the outbound publication attempt;
+- **push confirmation:** inbound Meta feed webhook;
+- **pull reconciliation:** bounded fallback for uncertain outcomes.
+
+`MetaPublicationReconciler` is not intended to replace the publication
+attempt or become the normal success path. A unique matching post yields
+`PUBLISHED`; no match after the propagation grace yields a retry-eligible
+result; an inconclusive result remains in reconciliation/unknown state.
+
+### Push reconciliation must not enter interaction policy
+
+When `WebhookProcessService` receives a feed interaction whose actor is
+the destination Page itself, it represents the platform's own outbound
+action. That event must be handled as reconciliation and must not
+continue into the normal interaction policy decision path.
 
 ---
 

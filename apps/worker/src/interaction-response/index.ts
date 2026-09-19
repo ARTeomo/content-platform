@@ -8,6 +8,7 @@ export {
   type WebhookRespondWorkerDeps,
   type RespondConsumerLike,
 } from './webhook-respond-worker.js';
+export { MetaGraphBridge, type MetaGraphBridgeOptions } from './meta-graph-bridge.js';
 export type {
   DecideOutcome,
   DestinationSnapshot,

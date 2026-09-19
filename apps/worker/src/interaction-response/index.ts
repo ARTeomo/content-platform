@@ -1,6 +1,13 @@
 export { InteractionResponseService } from './interaction-response-service.js';
 export { WebhookRespondService } from './webhook-respond-service.js';
 export type { WebhookRespondServiceDeps, RespondOutcome } from './webhook-respond-service.js';
+export {
+  WebhookRespondWorker,
+  WEBHOOK_RESPOND_QUEUE,
+  type WebhookRespondJobData,
+  type WebhookRespondWorkerDeps,
+  type RespondConsumerLike,
+} from './webhook-respond-worker.js';
 export type {
   DecideOutcome,
   DestinationSnapshot,

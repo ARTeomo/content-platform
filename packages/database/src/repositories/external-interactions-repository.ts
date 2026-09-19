@@ -23,14 +23,28 @@ export interface ExternalInteractionDraft {
 
 export interface UpsertResult {
   interaction: ExternalInteractionRow;
+  /** True if the incoming event was older than the persisted one and was skipped. */
   skipped: boolean;
 }
 
+/**
+ * Repository for external interactions.
+ *
+ * The central operation is `upsertMonotonic`, which inserts a new
+ * interaction or updates the existing one **only if** the incoming
+ * `occurred_at` is newer than the persisted one. This protects against
+ * out-of-order delivery by the external provider.
+ *
+ * Uses the two-step pattern: raw SQL upsert with `RETURNING id`, then a
+ * Drizzle SELECT for the full row. This avoids the snake_case vs
+ * camelCase mismatch that a `RETURNING *` would produce at runtime.
+ */
 export class ExternalInteractionsRepository {
   constructor(private readonly db: Database) {}
 
   async upsertMonotonic(tx: Transaction, draft: ExternalInteractionDraft): Promise<UpsertResult> {
-    const rows = (await tx.execute(sql`
+    // Step 1: atomic upsert, only returning the id.
+    const upsertedRows = (await tx.execute(sql`
       INSERT INTO external_interactions (
         webhook_event_id,
         destination_id,
@@ -56,7 +70,7 @@ export class ExternalInteractionsRepository {
         ${draft.actorDisplayName ?? null},
         ${draft.content ?? null},
         ${draft.permalink ?? null},
-        ${draft.occurredAt},
+        ${draft.occurredAt.toISOString()}::timestamptz,
         ${JSON.stringify(draft.rawMetadata ?? {})}::jsonb
       )
       ON CONFLICT (interaction_type, external_interaction_id)
@@ -73,15 +87,15 @@ export class ExternalInteractionsRepository {
         raw_metadata       = EXCLUDED.raw_metadata,
         updated_at         = now()
       WHERE external_interactions.occurred_at <= EXCLUDED.occurred_at
-      RETURNING *
-    `)) as unknown as ExternalInteractionRow[];
+      RETURNING id
+    `)) as unknown as { id: string }[];
 
-    const first = rows[0];
-    if (first) {
-      return { interaction: first, skipped: false };
-    }
+    const wasInsertedOrUpdated = upsertedRows.length > 0;
 
-    const [existing] = await tx
+    // Step 2: read the full row via Drizzle so camelCase properties are
+    // populated. Works whether the upsert inserted, updated, or was
+    // rejected by the WHERE clause.
+    const [row] = await tx
       .select()
       .from(externalInteractions)
       .where(
@@ -92,20 +106,11 @@ export class ExternalInteractionsRepository {
       )
       .limit(1);
 
-    if (!existing) {
-      throw new Error('Monotonic upsert skipped but no existing interaction found');
+    if (!row) {
+      throw new Error('Monotonic upsert did not produce a row');
     }
 
-    return { interaction: existing, skipped: true };
-  }
-
-  async findById(id: string): Promise<ExternalInteractionRow | undefined> {
-    const [row] = await this.db
-      .select()
-      .from(externalInteractions)
-      .where(eq(externalInteractions.id, id))
-      .limit(1);
-    return row;
+    return { interaction: row, skipped: !wasInsertedOrUpdated };
   }
 
   async findByExternalId(

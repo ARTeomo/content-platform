@@ -74,3 +74,11 @@ export class BullMqJobConsumer<T = unknown> {
     await this.connection.quit();
   }
 }
+
+/**
+ * Backward-compatible alias for `BullMqJobConsumer`.
+ *
+ * Some call sites (e.g. `content-publish-worker.ts`) refer to the
+ * consumer as `JobConsumer`. Both names refer to the same class.
+ */
+export { BullMqJobConsumer as JobConsumer };

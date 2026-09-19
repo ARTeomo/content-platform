@@ -58,29 +58,30 @@ correctly skipped — `FeedChangeExtractor` only materializes `comment`,
 
 ## Meta App configuration (recorded for continuity)
 
-| Item | Value |
-|---|---|
-| Meta App ID | `915404831335846` |
-| Meta App Mode | **Live** |
-| Business portfolio ID | `1416443380591994` |
-| Business portfolio name | `Content Platform` |
-| Page ID (Facebook) | `1287488901121523` |
-| Page username | `contentplatform.dev` |
-| System User | `contentplatform-bot` (`61594178114698`) |
-| Subscribed fields | `feed`, `mention` |
-| Verify token | `content-platform-verify-2026` |
-| Ngrok URL (current) | `https://uncanny-reappoint-unaligned.ngrok-free.dev` |
+| Item                    | Value                                                |
+| ----------------------- | ---------------------------------------------------- |
+| Meta App ID             | `915404831335846`                                    |
+| Meta App Mode           | **Live**                                             |
+| Business portfolio ID   | `1416443380591994`                                   |
+| Business portfolio name | `Content Platform`                                   |
+| Page ID (Facebook)      | `1287488901121523`                                   |
+| Page username           | `contentplatform.dev`                                |
+| System User             | `contentplatform-bot` (`61594178114698`)             |
+| Subscribed fields       | `feed`, `mention`                                    |
+| Verify token            | `content-platform-verify-2026`                       |
+| Ngrok URL (current)     | `https://uncanny-reappoint-unaligned.ngrok-free.dev` |
 
 Database records created during Phase 18a E2E:
 
-| Table | ID |
-|---|---|
-| `destinations.id` | `51eb5e79-b6a5-4f51-86bb-23dd81e9167e` |
+| Table                      | ID                                     |
+| -------------------------- | -------------------------------------- |
+| `destinations.id`          | `51eb5e79-b6a5-4f51-86bb-23dd81e9167e` |
 | `webhook_subscriptions.id` | `2bc850b3-3e93-45d7-98cd-45e07a2daf00` |
 
 **Security note:** the Meta App Secret and the ngrok authtoken appeared
 in the development chat during setup. Rotate both before any external
 collaboration:
+
 - App Secret: `developers.facebook.com/apps/915404831335846/settings/basic/` → Reset
 - Ngrok token: `dashboard.ngrok.com/get-started/your-authtoken` → Regenerate
 
@@ -165,12 +166,12 @@ The `GET /api/v1/webhooks/meta` handshake is also implemented:
 
 ### `apps/api` — routes
 
-| Method | Path                       | Purpose                                            |
-| ------ | -------------------------- | -------------------------------------------------- |
-| GET    | `/health`                  | Liveness                                           |
-| GET    | `/ready`                   | Readiness with DB health check                     |
-| POST   | `/api/v1/webhooks/meta`    | Webhook ingress (signature + tx + outbox)          |
-| GET    | `/api/v1/webhooks/meta`    | Meta `hub.challenge` handshake                     |
+| Method | Path                    | Purpose                                   |
+| ------ | ----------------------- | ----------------------------------------- |
+| GET    | `/health`               | Liveness                                  |
+| GET    | `/ready`                | Readiness with DB health check            |
+| POST   | `/api/v1/webhooks/meta` | Webhook ingress (signature + tx + outbox) |
+| GET    | `/api/v1/webhooks/meta` | Meta `hub.challenge` handshake            |
 
 ### Cloud services
 
@@ -348,7 +349,7 @@ workspace package's `vitest.config.ts` sets `fileParallelism: false`.
 ### pnpm `-r` runs packages in parallel — use `--workspace-concurrency=1`
 
 Even with `fileParallelism: false` inside each package, `pnpm -r` still
-runs the *packages* themselves in parallel. For tests that share a
+runs the _packages_ themselves in parallel. For tests that share a
 single PostgreSQL database (like this project), the root `test` script
 must be:
 
@@ -373,18 +374,14 @@ raw bytes needed for HMAC-SHA256 signature verification. The fix is a
 custom content-type parser:
 
 ```typescript
-app.addContentTypeParser(
-  'application/json',
-  { parseAs: 'buffer' },
-  (request, body, done) => {
-    request.rawBody = body as Buffer;
-    try {
-      done(null, JSON.parse((body as Buffer).toString('utf8')));
-    } catch (err) {
-      done(err as Error, undefined);
-    }
-  },
-);
+app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
+  request.rawBody = body as Buffer;
+  try {
+    done(null, JSON.parse((body as Buffer).toString('utf8')));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
 ```
 
 The `rawBody` is attached to the request via a `declare module 'fastify'`

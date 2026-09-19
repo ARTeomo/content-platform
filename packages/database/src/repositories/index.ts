@@ -30,7 +30,14 @@ export {
   type UpsertResult as ExternalInteractionUpsertResult,
 } from './external-interactions-repository.js';
 
-export { ProviderCredentialsRepository } from './provider-credentials-repository.js';
+export {
+  ProviderCredentialsRepository,
+  type ProviderCredentialRow,
+  type CredentialScope,
+  type CredentialStatus,
+  type ProviderCredentialInput,
+  type ProviderCredentialLookup,
+} from './provider-credentials-repository.js';
 
 export { PublicationsRepository } from './publications-repository.js';
 

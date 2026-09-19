@@ -33,6 +33,35 @@ export function redisOptionsFromUrl(redisUrl: string): RedisOptions {
   return options;
 }
 
+/**
+ * BullMQ-backed `JobQueue`.
+ *
+ * ## `removeOnComplete` and the `jobId` dedup contract
+ *
+ * BullMQ deduplicates by `jobId`: if a job with the same ID already
+ * exists in **any** state (waiting, active, delayed, completed, failed),
+ * `queue.add()` is a silent no-op. This is by design — it is what makes
+ * `jobId` a reliable idempotency key.
+ *
+ * The consequence is that a completed job blocks re-enqueue with the
+ * same `jobId` until the retention policy removes it. With the previous
+ * `removeOnComplete: 1000` setting, up to 1000 completed jobs were kept
+ * indefinitely, so a recovered outbox row could never be redispatched.
+ *
+ * `removeOnComplete: true` removes the job immediately on completion.
+ * BullMQ is a transient execution layer; the durable history of every
+ * external side effect already lives in `publication_attempts`,
+ * `webhook_deliveries`, `interaction_response_attempts`, and
+ * `interaction_response_reconciliations`. Nothing is lost.
+ *
+ * `removeOnFail: false` keeps failed jobs for inspection. Failed jobs
+ * stay in the queue until manually removed or until a future operational
+ * tool purges them. If a failed job blocks re-enqueue, the same class of
+ * problem appears — but failed jobs are exceptional and are expected to
+ * be investigated, not silently retried with the same `jobId`.
+ *
+ * @see DATABASE_SCHEMA_CONTRACT.md §12.5
+ */
 export class BullMqJobQueue implements JobQueue {
   private readonly connection: Redis;
   private readonly prefix: string;
@@ -45,7 +74,10 @@ export class BullMqJobQueue implements JobQueue {
       console.error('[bullmq] redis connection error:', err.message);
     });
     this.prefix = options.prefix ?? 'bull';
-    this.defaultJobOptions = { removeOnComplete: 1000, removeOnFail: false };
+    this.defaultJobOptions = {
+      removeOnComplete: true,
+      removeOnFail: false,
+    };
   }
 
   private getQueue(name: string): Queue {

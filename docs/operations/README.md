@@ -9,7 +9,8 @@ documentation for the Content Platform.
 
 | Document                                         | Purpose                                                   |
 | ------------------------------------------------ | --------------------------------------------------------- |
-| [`local-development.md`](./local-development.md) | Local PostgreSQL and Redis via Docker Compose             |
+| [`local-development.md`](./local-development.md) | Local PostgreSQL and Redis via cloud services             |
+| [`meta-app-setup.md`](./meta-app-setup.md)       | Meta App, webhook, System User setup runbook              |
 | `deployment.md`                                  | _Placeholder — will be added before the first deployment_ |
 | `runbook.md`                                     | _Placeholder — operational runbooks for common scenarios_ |
 | `troubleshooting.md`                             | _Placeholder — common failure modes and remediation_      |
@@ -33,7 +34,7 @@ reach production readiness:
 - Application rollback
 - Kill switch activation
 
-Each runbook will follow the same structure:
+Each runbook follows the same structure:
 
 ```text
 Symptom → Impact → Detection → Immediate action

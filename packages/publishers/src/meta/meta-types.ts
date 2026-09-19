@@ -42,6 +42,16 @@ export interface GraphClient {
   post(input: GraphPostInput): Promise<GraphPostResult>;
 }
 
+/**
+ * Backward-compatible alias for GraphClient.
+ *
+ * Some call sites (e.g. MetaGraphBridge) refer to the POST-only client as
+ * `GraphPostClient` to make their intent explicit. Both names refer to the
+ * same interface; the alias exists so that neither name needs to be
+ * renamed across the codebase.
+ */
+export type GraphPostClient = GraphClient;
+
 // ---------------------------------------------------------------------------
 // Graph client — GET
 // ---------------------------------------------------------------------------

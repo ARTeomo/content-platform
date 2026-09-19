@@ -24,6 +24,7 @@ export type {
   GraphGetClient,
   GraphGetInput,
   GraphGetResult,
+  GraphPostClient,
   GraphPostInput,
   GraphPostResult,
   MetaErrorCategory,

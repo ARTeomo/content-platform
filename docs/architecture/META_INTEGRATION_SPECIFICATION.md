@@ -7,8 +7,8 @@
 **Project:** Content Platform
 **Repository:** `https://github.com/ARTeomo/content-platform`
 **Baseline:** Current Meta architecture and DB v1.2 persistence model
-**Supersedes:** `META_INTEGRATION_SPECIFICATION.md` v1.0 historical baseline
-**Historical predecessor:** `META_INTEGRATION_SPECIFICATION_v1.0.md` — Phase 18a baseline
+**Supersedes:** none — first consolidated Meta specification
+**Baseline reference:** Phase 18a Meta architecture (design provenance, not versioned as a document)
 
 ---
 
@@ -101,12 +101,12 @@ The specification incorporates the architecture established through Phase 18a, P
 
 This specification is aligned with the following project contracts:
 
-| Document                                 | Version | Role                                                |
-| ---------------------------------------- | ------: | --------------------------------------------------- |
-| `TECHNICAL_SPECIFICATION.md`             |   0.9.0 | Platform-wide behavioral and architectural contract |
-| `LOGICAL_MODEL_SPECIFICATION.md`         |     1.0 | Logical domain model                                |
-| `DATABASE_SCHEMA_CONTRACT.md`            |     1.2 | Physical persistence contract                       |
-| `META_INTEGRATION_SPECIFICATION_v1.0.md` |     1.0 | Historical Phase 18a Meta architecture              |
+| Document                                        | Version | Role                                                |
+| ----------------------------------------------- | ------: | --------------------------------------------------- |
+| `TECHNICAL_SPECIFICATION.md`                    |   0.9.0 | Platform-wide behavioral and architectural contract |
+| `LOGICAL_MODEL_SPECIFICATION.md`                |     1.0 | Logical domain model                                |
+| `DATABASE_SCHEMA_CONTRACT.md`                   |     1.2 | Physical persistence contract                       |
+| Phase 18a Meta architecture (design provenance) |       — | Baseline reference, not versioned as a document     |
 
 The current Meta specification is subordinate to the platform-wide architectural, logical-model and database contracts except where it explicitly specializes Meta-specific behavior. It does not redefine the logical domain model or physical database schema. For Meta-specific behavior, this document is the current detailed behavioral authority.
 

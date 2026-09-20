@@ -6,7 +6,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 [![TypeScript](https://img.shields.io/badge/typescript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tests](https://img.shields.io/badge/tests-67%20passing-brightgreen)](#project-status)
+[![Tests](https://img.shields.io/badge/tests-208%20passing-brightgreen)](#project-status)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -21,6 +21,11 @@ validates the resulting publication package, applies image and
 attribution policies, routes content through configurable moderation,
 schedules approved material, publishes it through authorized external
 APIs, and reconciles the outcome of uncertain external operations.
+
+It also **receives** inbound events from external providers (starting
+with Meta), materializes them as first-class domain entities, and
+produces governed outbound responses through a policy- and
+moderation-controlled workflow.
 
 Facebook / Meta is treated as a **publisher adapter** and an
 **inbound webhook provider**, not as the foundation of the application.
@@ -52,6 +57,7 @@ The platform is designed around five principles:
 | **Webhook ingress**      | Meta webhook signature verification, idempotent persistence, materialization of interactions. |
 | **Interaction response** | Outbound responses to inbound comments and mentions, with moderation and reconciliation.      |
 | **Credential lifecycle** | Encrypted-at-rest Meta credentials with rotation, health states, and publishing pause.        |
+| **Transactional outbox** | Every durable side effect enqueued through `outbox_jobs` in the same DB transaction.          |
 | **Observability**        | Structured logs, metrics, trace IDs, health endpoints, audit trail.                           |
 
 ---
@@ -59,55 +65,62 @@ The platform is designed around five principles:
 ## Architecture at a glance
 
 ```text
-                        EXTERNAL SOURCES                META PLATFORM
-                              │                              │
-                              ▼                              │
-                    ┌──────────────────┐                     │
-                    │  Source Poller   │                     │
-                    └────────┬─────────┘                     │
-                             │                               │
-                    ┌────────▼─────────┐                     │
-                    │  Normalization   │                     │
-                    │  Relevance       │                     │
-                    │  Entities        │                     │
-                    │  Deduplication   │                     │
-                    │  Clustering      │                     │
-                    └────────┬─────────┘                     │
-                             │                               │
-                    ┌────────▼─────────┐       ┌─────────────▼──────────┐
-                    │  Content         │       │  Webhook Ingress       │
-                    │  Processing      │       │  (signature, idempot.) │
-                    │  Validation      │       └─────────────┬──────────┘
-                    │  Moderation      │                     │
-                    │  Scheduling      │                     ▼
-                    └────────┬─────────┘       ┌─────────────────────────┐
-                             │                 │  Webhook Processing     │
-                             ▼                 │  Interaction Response   │
-                    ┌──────────────────┐       └─────────────┬───────────┘
-                    │  Publisher       │                     │
-                    │  Adapter         │◄────────────────────┘
-                    │  (Meta)          │       (push reconciliation)
-                    └────────┬─────────┘
-                             │
-                             ▼
+                        EXTERNAL SOURCES                 META PLATFORM
+                              |                                |
+                              v                                |
+                    +------------------+                       |
+                    |  Source Poller   |                       |
+                    +--------+---------+                       |
+                             |                                 |
+                    +--------v---------+                       |
+                    |  Normalization   |                       |
+                    |  Relevance       |                       |
+                    |  Entities        |                       |
+                    |  Deduplication   |                       |
+                    |  Clustering      |                       |
+                    +--------+---------+                       |
+                             |                                 |
+                    +--------v---------+       +---------------+---------+
+                    |  Content         |       |  Webhook Ingress        |
+                    |  Processing      |       |  (signature, idempot.)  |
+                    |  Validation      |       +---------------+---------+
+                    |  Moderation      |                       |
+                    |  Scheduling      |                       v
+                    +--------+---------+       +---------------------------+
+                             |                 |  Webhook Processing       |
+                             v                 |  Interaction Response     |
+                    +------------------+       +-------------+-------------+
+                    |  Publisher       |                     |
+                    |  Adapter         |<--------------------+
+                    |  (Meta)          |   (push reconciliation)
+                    +--------+---------+
+                             |
+                             v
                        EXTERNAL POST
 
-        ═══════════════════════════════════════════════
-                       Platform backbone
-        ┌──────────────────────────────────────────────┐
-        │  PostgreSQL  —  system of record             │
-        │  outbox_jobs —  transactional outbox         │
-        │  Redis/BullMQ — asynchronous execution       │
-        │  OutboxDispatcher — DB → Redis bridge        │
-        └──────────────────────────────────────────────┘
+        =========================================================
+                          Platform backbone
+        +-------------------------------------------------------+
+        |  PostgreSQL     -  system of record                   |
+        |  outbox_jobs    -  transactional outbox               |
+        |  Redis/BullMQ   -  asynchronous execution             |
+        |  OutboxDispatcher - DB -> Redis bridge                |
+        +-------------------------------------------------------+
 ```
 
 The platform separates:
 
 ```text
-Discovery → Understanding → Deduplication → Story management
-    → Editorial processing → Validation → Moderation
-    → Scheduling → Publication → Reconciliation → Audit
+OUTBOUND
+  Discovery -> Understanding -> Deduplication -> Story management
+    -> Editorial processing -> Validation -> Moderation
+    -> Scheduling -> Publication -> Reconciliation -> Audit
+
+INBOUND
+  Webhook receipt -> Verification -> Persistence + outbox
+    -> Processing -> Interaction materialization
+    -> Policy decision -> Moderation -> Response execution
+    -> Reconciliation -> Audit
 ```
 
 ---
@@ -116,51 +129,68 @@ Discovery → Understanding → Deduplication → Story management
 
 ```text
 content-platform/
-│
-├── apps/                       Application processes
-│   ├── api/                    HTTP API and webhook ingress (planned)
-│   ├── worker/                 Background workers and OutboxDispatcher
-│   │   ├── src/
-│   │   │   ├── config.ts       Environment loading
-│   │   │   ├── index.ts        Worker entrypoint
-│   │   │   ├── outbox-dispatcher.ts
-│   │   │   ├── queue/          BullMQ abstractions (JobQueue, JobConsumer)
-│   │   │   └── webhook/        webhook.process service + change extractors
-│   │   └── package.json
-│   └── admin/                  Administrative UI (planned)
-│
-├── packages/                   Shared libraries
-│   ├── database/               Drizzle schema, migrations, repositories
-│   │   ├── src/
-│   │   │   ├── schema/         44 tables organized by domain
-│   │   │   ├── repositories/   8 repositories
-│   │   │   ├── transaction/    TransactionManager
-│   │   │   └── client.ts       Database client factory
-│   │   └── migrations/         0000 – 0013
-│   └── authentication/         Credential encryption + Meta lifecycle
-│       └── src/
-│           ├── encryption/     AES-256-GCM credential encryption provider
-│           └── meta/           MetaCredentialService + Graph API client
-│
-├── docs/                       Documentation
-│   ├── adr/                    Architecture Decision Records
-│   ├── architecture/           System and domain documentation
-│   ├── conventions/            Development conventions
-│   └── operations/             Deployment and operational runbooks
-│
-├── scaffold/                   Repository bootstrap scripts (local only)
-│
-├── .github/                    GitHub configuration and templates
-├── .vscode/                    Shared VS Code settings
-│
-├── HANDOFF.md                  Session boundary snapshot
-├── docker-compose.yml          (reference) local services definition
-├── package.json                Root workspace configuration
-├── pnpm-workspace.yaml         Workspace definition and version overrides
-├── tsconfig.base.json          Shared TypeScript configuration
-├── eslint.config.js            ESLint flat configuration
-├── prettier.config.js          Prettier configuration
-└── README.md                   This file
+|
++-- apps/                          Application processes
+|   +-- api/                       Fastify webhook ingress (POST + GET)
+|   |   +-- src/
+|   |       +-- routes/webhooks/meta.ts
+|   |       +-- routes/webhooks/signature.ts
+|   |       +-- routes/webhooks/envelope.ts
+|   |       +-- app.ts
+|   |       +-- config.ts
+|   +-- worker/                    Background workers + OutboxDispatcher
+|   |   +-- src/
+|   |       +-- config.ts          Environment loading
+|   |       +-- index.ts           Worker entrypoint
+|   |       +-- outbox-dispatcher.ts
+|   |       +-- queue/             BullMQ abstractions
+|   |       +-- webhook/           webhook.process service + extractors
+|   |       +-- interaction-response/  webhook.respond + reconcile
+|   |       +-- publication/       content.publish + scheduler + reconcile
+|   |       +-- scripts/           Operational tooling (BullMQ inspection)
+|   +-- admin/                     Administrative UI (planned)
+|
++-- packages/                      Shared libraries
+|   +-- database/                  Drizzle schema, migrations, repositories
+|   |   +-- src/
+|   |   |   +-- schema/            44 tables organized by domain
+|   |   |   +-- repositories/      15 repository classes
+|   |   |   +-- transaction/       TransactionManager
+|   |   |   +-- client.ts          Database client factory
+|   |   +-- migrations/            0000 - 0013
+|   |   +-- scripts/               Operational scripts
+|   +-- authentication/            Credential encryption + Meta lifecycle
+|   |   +-- src/
+|   |       +-- encryption/        AES-256-GCM credential encryption provider
+|   |       +-- meta/              MetaCredentialService + Graph API client
+|   +-- interaction-response/      Policy engine + template renderer
+|   +-- publishers/                Meta adapters + rate limiter
+|       +-- src/meta/
+|           +-- meta-interaction-adapter.ts
+|           +-- meta-publisher-adapter.ts
+|           +-- meta-response-reconciler.ts
+|           +-- meta-publication-reconciler.ts
+|           +-- meta-rate-limiter.ts
+|
++-- docs/                          Documentation
+|   +-- adr/                       Architecture Decision Records
+|   +-- architecture/              Normative technical specifications
+|   +-- audit/                     Baseline audits (not normative)
+|   +-- conventions/               Development conventions
+|   +-- operations/                Deployment and operational runbooks
+|
++-- scaffold/                      Repository bootstrap scripts (local only)
++-- .github/                       GitHub configuration and templates
++-- .vscode/                       Shared VS Code settings
+|
++-- HANDOFF.md                     Session boundary snapshot
++-- docker-compose.yml             (reference) local services definition
++-- package.json                   Root workspace configuration
++-- pnpm-workspace.yaml            Workspace definition and version overrides
++-- tsconfig.base.json             Shared TypeScript configuration
++-- eslint.config.js               ESLint flat configuration
++-- prettier.config.js             Prettier configuration
++-- README.md                      This file
 ```
 
 ---
@@ -172,23 +202,30 @@ disagree, the higher-level document wins.
 
 ```text
 1. Domain and architecture contracts
-2. DB v1 Logical Model Specification
-3. DATABASE_SCHEMA_CONTRACT.md
-4. Drizzle schema implementation
-5. Generated PostgreSQL migrations
+2. TECHNICAL_SPECIFICATION.md v0.9.0
+3. LOGICAL_MODEL_SPECIFICATION.md v1.0
+4. DATABASE_SCHEMA_CONTRACT.md v1.2
+5. META_INTEGRATION_SPECIFICATION.md v1.4
+6. Drizzle schema implementation
+7. Generated PostgreSQL migrations
 ```
 
-| Document                                                             | Purpose                                                        |
-| -------------------------------------------------------------------- | -------------------------------------------------------------- |
-| [`TECHNICAL_SPECIFICATION.md`](./TECHNICAL_SPECIFICATION.md)         | System behavior, state machines, failure modes, observability. |
-| [`LOGICAL_MODEL_SPECIFICATION.md`](./LOGICAL_MODEL_SPECIFICATION.md) | DB v1 logical ingestion, provenance, and clustering model.     |
-| [`DATABASE_SCHEMA_CONTRACT.md`](./DATABASE_SCHEMA_CONTRACT.md)       | Physical PostgreSQL persistence contract (v1.2, 44 tables).    |
-| [`HANDOFF.md`](./HANDOFF.md)                                         | Current state snapshot for session continuity.                 |
-| [`docs/README.md`](./docs/README.md)                                 | Documentation index and reading order.                         |
-| [`docs/adr/`](./docs/adr/)                                           | Architecture Decision Records.                                 |
-| [`docs/architecture/`](./docs/architecture/)                         | System overview, domain model, module map.                     |
-| [`docs/conventions/`](./docs/conventions/)                           | Coding standards, commit conventions, migration rules.         |
-| [`docs/operations/`](./docs/operations/)                             | Local setup, deployment, operational runbooks.                 |
+Audit documents (`docs/audit/`) are **not** part of the source-of-truth
+hierarchy. They are a reflection on the state, not a normative reference.
+
+| Document                                                                                     | Purpose                                                                  |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [`TECHNICAL_SPECIFICATION.md`](./docs/architecture/TECHNICAL_SPECIFICATION.md)               | Platform-wide system behavior, state machines, failure modes.            |
+| [`LOGICAL_MODEL_SPECIFICATION.md`](./docs/architecture/LOGICAL_MODEL_SPECIFICATION.md)       | DB v1 logical ingestion, provenance, and clustering model.               |
+| [`DATABASE_SCHEMA_CONTRACT.md`](./docs/architecture/DATABASE_SCHEMA_CONTRACT.md)             | Physical PostgreSQL persistence contract (v1.2, 44 tables).              |
+| [`META_INTEGRATION_SPECIFICATION.md`](./docs/architecture/META_INTEGRATION_SPECIFICATION.md) | Meta-specific behavioral authority (v1.4).                               |
+| [`HANDOFF.md`](./HANDOFF.md)                                                                 | Current state snapshot for session continuity.                           |
+| [`docs/README.md`](./docs/README.md)                                                         | Documentation index and reading order.                                   |
+| [`docs/adr/`](./docs/adr/)                                                                   | Architecture Decision Records.                                           |
+| [`docs/architecture/`](./docs/architecture/)                                                 | System overview, domain model, module map, and normative specifications. |
+| [`docs/audit/`](./docs/audit/)                                                               | Baseline audits reflecting implementation against baseline.              |
+| [`docs/conventions/`](./docs/conventions/)                                                   | Coding standards, commit conventions, migration rules.                   |
+| [`docs/operations/`](./docs/operations/)                                                     | Local setup, deployment, operational runbooks.                           |
 
 ---
 
@@ -248,6 +285,30 @@ pnpm db:migrate               # apply pending migrations
 pnpm db:studio                # launch Drizzle Studio
 ```
 
+### Running the worker
+
+The worker process owns the outbox dispatcher, the publication scheduler,
+and all BullMQ consumers:
+
+```bash
+export DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
+export REDIS_URL="$(grep '^REDIS_URL=' .env | cut -d= -f2-)"
+export META_PAGE_ACCESS_TOKEN="$(grep '^META_PAGE_ACCESS_TOKEN=' .env | cut -d= -f2-)"
+export META_GRAPH_API_VERSION="$(grep '^META_GRAPH_API_VERSION=' .env | cut -d= -f2-)"
+
+pnpm --filter @content-platform/worker start
+```
+
+### Running the API
+
+```bash
+export DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2-)"
+export META_APP_SECRET="$(grep '^META_APP_SECRET=' .env | cut -d= -f2-)"
+export WEBHOOK_TOKEN_ENCRYPTION_KEY="$(grep '^WEBHOOK_TOKEN_ENCRYPTION_KEY=' .env | cut -d= -f2-)"
+
+pnpm --filter @content-platform/api dev
+```
+
 ---
 
 ## Development workflow
@@ -258,6 +319,15 @@ This project follows [Conventional Commits 1.0](https://www.conventionalcommits.
 See [`docs/conventions/commits.md`](./docs/conventions/commits.md) for
 the full rules, including the locked type vocabulary and the recommended
 scope list.
+
+Common types and scopes in this repository:
+
+```text
+feat(worker)         feat(publication)     feat(api)
+fix(publication)     fix(queue)            fix(webhook)
+chore(scripts)       chore(env)
+docs(spec)           docs(audit)           docs
+```
 
 ### Branch strategy
 
@@ -278,18 +348,33 @@ lists the checklist that reviewers expect to see completed.
 ### Schema changes
 
 Any change to the Drizzle schema must be reflected in
-[`DATABASE_SCHEMA_CONTRACT.md`](./DATABASE_SCHEMA_CONTRACT.md) **before**
-the schema is modified. See the "Implementation gate" note at the bottom
-of that document.
+[`DATABASE_SCHEMA_CONTRACT.md`](./docs/architecture/DATABASE_SCHEMA_CONTRACT.md)
+**before** the schema is modified. See the "Implementation gate" note at
+the bottom of that document.
 
 ---
 
 ## Project status
 
-**Active development.** The architecture, logical model, and database
-schema contract are frozen. The schema, credential layer, outbox
-dispatcher, and webhook processing pipeline are implemented and tested
-against real cloud services.
+**Phase 19 complete.** The architecture, logical model, and database
+schema contract are frozen and stable. The complete two-way Meta
+integration (inbound webhook + outbound publication + interaction
+response) is implemented and verified end-to-end against the real Meta
+Graph API.
+
+### Workspace
+
+Six workspace packages:
+
+| Package                         | Purpose                                                                                                                     |   Tests |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------: |
+| `packages/database`             | Drizzle schema, migrations, 15 repositories, `TransactionManager`                                                           |      22 |
+| `packages/authentication`       | AES-256-GCM, `MetaCredentialService`, Graph API client, `MetaErrorMapper`                                                   |      37 |
+| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                      |      21 |
+| `packages/publishers`           | `MetaInteractionAdapter`, `MetaPublisherAdapter`, reconcilers, rate limiter                                                 |      51 |
+| `apps/worker`                   | `OutboxDispatcher`, publication scheduler, `webhook.process`, `webhook.respond`, `content.publish`, `publication.reconcile` |      73 |
+| `apps/api`                      | Fastify webhook ingress (POST + GET)                                                                                        |       4 |
+| **Total**                       |                                                                                                                             | **208** |
 
 ### Implemented
 
@@ -298,62 +383,97 @@ against real cloud services.
 - [x] `pgcrypto` extension registered in the baseline migration
 - [x] Partial index `publications(external_post_id) WHERE ... IS NOT NULL`
 - [x] Partial unique index `provider_credentials_unique` with `COALESCE`
-- [x] Deferred FK `external_interactions.publication_id` → `publications.id`
+- [x] Deferred FK `external_interactions.publication_id -> publications.id`
 - [x] `TransactionManager` (the `run(fn)` API)
 - [x] `createDatabaseClient` factory with health check and graceful shutdown
-- [x] **Eight repositories:**
+- [x] **15 repositories**:
   - `OutboxRepository`
   - `WebhookSubscriptionsRepository`
   - `WebhookSubscriptionHealthRepository`
   - `WebhookEventsRepository`
   - `WebhookDeliveriesRepository`
   - `ExternalInteractionsRepository`
+  - `DestinationsRepository`
   - `ProviderCredentialsRepository`
-  - `PublicationsRepository`
+  - `PublicationsRepository` (including `claimForPublishing`)
+  - `PublicationAttemptsRepository`
+  - `PublicationReconciliationsRepository`
+  - `InteractionResponsesRepository`
+  - `InteractionResponseAttemptsRepository`
+  - `InteractionModerationActionsRepository`
+  - `InteractionResponseReconciliationsRepository`
 - [x] **Credential encryption** (AES-256-GCM with AAD binding and key rotation)
-- [x] **MetaCredentialService** (store / rotate / invalidate / validate / healthCheck)
-- [x] **MetaErrorMapper** (Graph API error categorization)
-- [x] **OutboxDispatcher** (PG → BullMQ bridge with stale recovery and cleanup)
+- [x] **`MetaCredentialService`** (store / rotate / invalidate / validate / healthCheck)
+- [x] **`MetaErrorMapper`** (Graph API error categorization)
+- [x] **`OutboxDispatcher`** (PG -> BullMQ bridge with stale recovery and cleanup)
 - [x] **BullMQ abstractions** (`JobQueue`, `BullMqJobQueue`, `BullMqJobConsumer`)
-- [x] **`webhook.process` service** with change extractor registry
+- [x] **Webhook ingress** (`apps/api`, signature verification + transaction + outbox)
+- [x] **`webhook.process` worker** with change extractor registry
 - [x] **Change extractors** for `feed` (COMMENT, REACTION) and `mention`
+- [x] **Interaction response lifecycle** (policy, moderation, execution, reconciliation)
+- [x] **Publication scheduler** (`PublicationSchedulerService` + worker)
+- [x] **Outbound publication** (`content.publish`, `MetaPublisherAdapter`)
+- [x] **Publication reconciliation** (`publication.reconcile`, `MetaPublicationReconciler`)
+- [x] **Real Meta E2E verified** (Phase 18a inbound, Phase 19e outbound)
 - [x] Monorepo toolchain (pnpm workspaces, TS project references, ESLint flat config)
-- [x] **67 passing tests** against real PostgreSQL and Redis
+- [x] **208 passing tests** against real PostgreSQL and Redis
 
-### In progress
+### Baseline audit findings (open)
 
-- [ ] Webhook ingress route in `apps/api` (signature verification + outbox enqueue)
+A baseline audit was performed against the original three baseline
+documents. It identified seven findings that are not yet closed in the
+runtime. These are tracked in
+[`docs/audit/baseline-audit-20-09-2026.md`](./docs/audit/baseline-audit-20-09-2026.md).
+
+| Finding | Summary                                                         | Spec reference         |
+| ------- | --------------------------------------------------------------- | ---------------------- |
+| F1      | Webhook ingress transaction boundary (interpretation-dependent) | Meta spec §9.5         |
+| F2      | Interaction response config not loaded from `system_config`     | Meta spec §15.1        |
+| F3      | Interaction response rate limiter is a no-op                    | Meta spec §30.3        |
+| F4      | Publication rate limiter is a no-op                             | Meta spec §30.1, §30.3 |
+| F5      | Credential service not wired into worker outbound path          | Meta spec §26.8        |
+| F6      | Scheduler credential-health gate missing                        | Meta spec §22.3        |
+| F7      | Outbox `system.rebuild` / dedicated cleanup contract            | Meta spec §43.5, §44   |
+
+None of these block the DB v1.3 milestone. They are scheduled as
+priority-1 (F5, F6), priority-2 (F2, F3, F4) and priority-3 (F7)
+remediation work.
 
 ### Next
 
-- [ ] `webhook.respond` worker and interaction response policy engine
-- [ ] `MetaInteractionAdapter` (outbound Graph API call)
-- [ ] Push-reconciliation via the `feed` webhook
-- [ ] `MetaPublisherAdapter` and publication reconciliation
-- [ ] `MetaRateLimiter` extension for inbound/outbound engagement
+- [ ] **DB v1.3** — `webhook_endpoints` + multi-page Meta support
+- [ ] Credential service integration into the worker outbound path (F5)
+- [ ] Scheduler credential-health gate (F6)
+- [ ] Configuration loading from `system_config` (F2)
+- [ ] Real rate-limiter enforcement (F3, F4)
+- [ ] `system.rebuild` / `system.outbox.cleanup` queue wiring (F7)
 - [ ] Admin UI (`apps/admin`)
 - [ ] Analytics read models (`meta_posts`, `meta_comments`, `meta_reactions`)
 
-See [`docs/architecture/README.md`](./docs/architecture/README.md) for the
-full architecture roadmap.
+See [`docs/architecture/META_INTEGRATION_SPECIFICATION.md`](./docs/architecture/META_INTEGRATION_SPECIFICATION.md)
+for the Meta boundary contract, and
+[`HANDOFF.md`](./HANDOFF.md) for the current state snapshot.
 
 ---
 
 ## Roadmap
 
-| Phase            | Scope                                                             | Status      |
-| ---------------- | ----------------------------------------------------------------- | ----------- |
-| **v1.0 – v1.2**  | Database schema contract evolution                                | ✅ Complete |
-| **Phase 1 – 13** | Drizzle schema implementation (44 tables)                         | ✅ Complete |
-| **Phase 14**     | Local dev environment (Neon + Upstash)                            | ✅ Complete |
-| **Phase 15**     | Credential lifecycle (`MetaCredentialService`)                    | ✅ Complete |
-| **Phase 16**     | Outbox dispatcher (PG → BullMQ)                                   | ✅ Complete |
-| **Phase 17**     | `webhook.process` service + change extractors                     | ✅ Complete |
-| **Phase 18a**    | Webhook ingress (`apps/api`)                                      | ⏳ Next     |
-| **Phase 18b**    | Interaction response lifecycle (`webhook.respond`)                | ⏳          |
-| **Phase 19**     | Meta publisher adapter and reconciliation                         | ⏳          |
-| **v1.3**         | `webhook_endpoints`, multi-page Meta support                      | 📅 Planned  |
-| **v1.4+**        | Analytics read models, materialized views, AI response generation | 📅 Planned  |
+| Phase              | Scope                                                             | Status   |
+| ------------------ | ----------------------------------------------------------------- | -------- |
+| **v1.0 – v1.2**    | Database schema contract evolution                                | Complete |
+| **Phase 1 – 13**   | Drizzle schema implementation (44 tables)                         | Complete |
+| **Phase 14**       | Local dev environment (Neon + Upstash)                            | Complete |
+| **Phase 15**       | Credential lifecycle (`MetaCredentialService`)                    | Complete |
+| **Phase 16**       | Outbox dispatcher (PG -> BullMQ)                                  | Complete |
+| **Phase 17 / 18a** | Webhook ingress (`apps/api`) + real Meta inbound E2E              | Complete |
+| **Phase 18b**      | Interaction response lifecycle (`webhook.respond`)                | Complete |
+| **Phase 19a**      | Outbound publication execution (`content.publish`)                | Complete |
+| **Phase 19b**      | Uncertain-outcome reconciliation foundation                       | Complete |
+| **Phase 19c**      | Publication reconciliation worker/service/reconciler              | Complete |
+| **Phase 19d**      | Publication scheduler                                             | Complete |
+| **Phase 19e**      | Real Meta outbound E2E + hardening                                | Complete |
+| **v1.3**           | `webhook_endpoints`, multi-page Meta support                      | Next     |
+| **v1.4+**          | Analytics read models, materialized views, AI response generation | Planned  |
 
 ---
 

@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# CI — Content Platform
+#
+# Runs on every push to main and on every pull request targeting main.
+#
+# The job:
+#   1. Installs the pnpm workspace with a frozen lockfile
+#   2. Verifies code formatting
+#   3. Runs ESLint
+#   4. Runs the TypeScript compiler in --noEmit mode
+#   5. Runs the test suite
+#
+# The DB- and Redis-backed tests require the TEST_DATABASE_URL and
+# TEST_REDIS_URL repository secrets. When those are absent, those tests
+# self-skip via the `describe.skipIf(!TEST_DB_URL)` pattern and the job
+# still passes with the non-DB tests.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel an in-progress run when a new commit lands on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege token. Nothing in the job writes to the repo.
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Build, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Reads the `packageManager` field from package.json (pnpm@12.3.4).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      # Reads the Node version from .nvmrc (22). Caches the pnpm store
+      # keyed by pnpm-lock.yaml so subsequent runs skip the download.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+        env:
+          # Empty strings when the secrets are not configured. The test
+          # suite detects this and skips the DB- and Redis-backed tests.
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+          TEST_REDIS_URL: ${{ secrets.TEST_REDIS_URL }}

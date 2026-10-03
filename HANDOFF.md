@@ -4,7 +4,7 @@ This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
 **Snapshot date:** 2026-10-03
-**Last commit:** `97db14d` (feat(worker): add system rebuild and outbox cleanup queues)
+**Last commit:** `76410d8` (chore(tooling): add worker dev script and seed migration snapshots)
 **Repository:** https://github.com/ARTeomo/content-platform
 
 ---
@@ -185,10 +185,32 @@ occur under concurrency.
 
 ### Findings still open
 
-None. Sprint C closed F7, F11, and F12. The `audit_logs` table
-remains without a writer by design; it is reserved for
-actor-initiated changes from the admin UI, which does not yet
-exist.
+None. Sprint C closed F7, F11, and F12. Two additional gaps
+surfaced during the closing review and were closed in follow-up
+commits:
+
+- **F8 — reconciliation gap.** The interaction response scheduler
+  covered stale `IN_PROGRESS` rows but not stale `UNKNOWN` rows.
+  A response whose provider call returned a network error was
+  left in `UNKNOWN` and never reconciled. The scheduler now claims
+  both statuses via `touchStaleUnresolved`. Commit `c9b13e7`.
+
+- **F17 — worker dev script.** `apps/worker/package.json` lacked a
+  `dev` script while `apps/api` had one. Commit `76410d8`.
+
+The `audit_logs` table remains without a writer by design; it is
+reserved for actor-initiated changes from the admin UI, which does
+not yet exist.
+
+### Drizzle snapshot chain
+
+The `drizzle-kit generate` tool was broken after the Sprint C
+seed-only migrations. `0013_seed_system_config` and
+`0014_seed_rate_limit_budgets` added `_journal.json` entries but no
+matching `_snapshot.json` files, so the next schema change would
+have had no `prevId` anchor. Both snapshot files were created by
+copying `0012_snapshot.json` and refreshing the `id`/`prevId`
+chain. Commit `76410d8`.
 
 ---
 
@@ -1285,6 +1307,32 @@ alongside `SCHEDULED` (direct enqueue / `system.rebuild`) and `RETRY`
 The `IN_PROGRESS` transition must be a single atomic claim
 (`claimForPublishing`) with a status predicate in the `WHERE` clause.
 Two separate unguarded updates are not sufficient.
+
+---
+
+### Drizzle snapshot chain breaks with seed-only migrations
+
+Every `_journal.json` entry must have a matching
+`NNNN_snapshot.json`, even when the migration contains only data
+changes (INSERTs) and no DDL. Without it, the next `drizzle-kit
+generate` fails because the tool cannot find a `prevId` anchor for
+the new snapshot.
+
+The fix is to copy the previous snapshot, assign a new `id`, and
+set `prevId` to the previous snapshot's `id`. Two seed-only
+migrations needed this treatment in Sprint C:
+`0013_seed_system_config` and `0014_seed_rate_limit_budgets`.
+
+Verification: after the fix,
+
+```bash
+pnpm --filter @content-platform/database exec drizzle-kit generate
+```
+
+must print `No schema changes, nothing to migrate`. If it produces
+a new `NNNN_*.sql` file, the snapshot chain is not consistent with
+the Drizzle schema definitions, and the new files must be removed
+before continuing.
 
 ---
 

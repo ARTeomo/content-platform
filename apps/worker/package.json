@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "dev": "node --watch dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "node dist/index.js"

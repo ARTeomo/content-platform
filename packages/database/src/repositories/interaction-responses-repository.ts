@@ -57,15 +57,6 @@ export class InteractionResponsesRepository {
     return row;
   }
 
-  /**
-   * Idempotent insert: transitions the interaction to a response row
-   * exactly once, even under concurrent callers.
-   *
-   * The `inserted` flag lets the caller decide whether to enqueue the
-   * follow-up outbox job. Enqueuing unconditionally would produce a
-   * unique-constraint violation on `outbox_jobs.job_id`, because the
-   * job id is derived from the response id.
-   */
   async createIdempotent(
     tx: Transaction,
     input: InteractionResponseInput,
@@ -212,6 +203,9 @@ export class InteractionResponsesRepository {
       .where(eq(interactionResponses.id, id));
   }
 
+  /**
+   * Atomically claim due SCHEDULED responses for delivery.
+   */
   async claimDueScheduled(tx: Transaction, limit: number): Promise<string[]> {
     const rows = (await tx.execute(sql`
       WITH claimed AS (
@@ -232,10 +226,23 @@ export class InteractionResponsesRepository {
     return rows.map((r) => r.id);
   }
 
-  async findStaleInProgress(thresholdSeconds: number, limit: number): Promise<string[]> {
+  /**
+   * Read-only diagnostic: list unresolved response IDs without
+   * claiming them.
+   *
+   * "Unresolved" covers two statuses with the same operational
+   * meaning — the response's external outcome is uncertain and needs
+   * a pull reconciliation:
+   *
+   *   - IN_PROGRESS  — a worker started but never reported back
+   *   - UNKNOWN      — a worker reported a network/unknown error
+   *
+   * Prefer `touchStaleUnresolved` inside the scheduler transaction.
+   */
+  async findStaleUnresolved(thresholdSeconds: number, limit: number): Promise<string[]> {
     const rows = (await this.db.execute(sql`
       SELECT id FROM interaction_responses
-      WHERE status = 'IN_PROGRESS'
+      WHERE status IN ('IN_PROGRESS', 'UNKNOWN')
         AND updated_at < now() - interval '${sql.raw(String(thresholdSeconds))} seconds'
       ORDER BY updated_at ASC
       LIMIT ${limit}
@@ -243,7 +250,14 @@ export class InteractionResponsesRepository {
     return rows.map((r) => r.id);
   }
 
-  async touchStaleInProgress(
+  /**
+   * Atomically claim stale unresolved rows by touching `updated_at`.
+   *
+   * Used inside a transaction by the interaction response scheduler so
+   * that the outbox enqueue and the "we have seen this row" marker are
+   * committed together.
+   */
+  async touchStaleUnresolved(
     tx: Transaction,
     thresholdSeconds: number,
     limit: number,
@@ -251,7 +265,7 @@ export class InteractionResponsesRepository {
     const rows = (await tx.execute(sql`
       WITH claimed AS (
         SELECT id FROM interaction_responses
-        WHERE status = 'IN_PROGRESS'
+        WHERE status IN ('IN_PROGRESS', 'UNKNOWN')
           AND updated_at < now() - interval '${sql.raw(String(thresholdSeconds))} seconds'
         ORDER BY updated_at ASC
         LIMIT ${limit}

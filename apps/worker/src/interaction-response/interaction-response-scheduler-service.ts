@@ -11,9 +11,10 @@ export interface InteractionResponseSchedulerServiceDeps {
   /** Maximum responses to claim per scan. */
   batchSize: number;
   /**
-   * A QUEUED/IN_PROGRESS response is considered stale when its
-   * updated_at is older than this many seconds. Stale rows are
-   * enqueued for pull reconciliation.
+   * A response is "stale" when its `updated_at` is older than this
+   * many seconds and it is in one of the unresolved statuses
+   * (`IN_PROGRESS`, `UNKNOWN`). Stale rows are enqueued for pull
+   * reconciliation.
    */
   staleThresholdSeconds: number;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -33,9 +34,16 @@ export interface InteractionResponseSchedulerRunResult {
  *      - Atomic transition: SCHEDULED → QUEUED
  *      - Outbox enqueue: webhook.respond:{responseId}
  *
- *   2. IN_PROGRESS responses older than staleThresholdSeconds
+ *   2. Unresolved responses older than staleThresholdSeconds
+ *      - Unresolved statuses: IN_PROGRESS, UNKNOWN
  *      - Atomic touch: updated_at = now() (status unchanged)
  *      - Outbox enqueue: webhook.respond.reconcile:{responseId}:{ts}
+ *
+ * The IN_PROGRESS case covers a worker that started but never reported
+ * back (crash, SIGKILL, hung HTTP call). The UNKNOWN case covers a
+ * worker that reported a network or unknown error and gave up without
+ * scheduling its own reconciliation. Both need the same follow-up: a
+ * pull reconciliation against the provider.
  *
  * Both scans claim rows with FOR UPDATE SKIP LOCKED and perform the
  * state change and the outbox enqueue inside a single transaction.
@@ -49,7 +57,7 @@ export class InteractionResponseSchedulerService {
 
   async runOnce(): Promise<InteractionResponseSchedulerRunResult> {
     const scheduledCount = await this.scanScheduled();
-    const reconciledCount = await this.scanStaleInProgress();
+    const reconciledCount = await this.scanStaleUnresolved();
     return { scheduledCount, reconciledCount };
   }
 
@@ -71,11 +79,11 @@ export class InteractionResponseSchedulerService {
     });
   }
 
-  private async scanStaleInProgress(): Promise<number> {
+  private async scanStaleUnresolved(): Promise<number> {
     const { txManager, responsesRepo, outboxRepo, batchSize, staleThresholdSeconds } = this.deps;
 
     return await txManager.run(async (tx) => {
-      const ids = await responsesRepo.touchStaleInProgress(tx, staleThresholdSeconds, batchSize);
+      const ids = await responsesRepo.touchStaleUnresolved(tx, staleThresholdSeconds, batchSize);
 
       const ts = Date.now();
       for (const id of ids) {

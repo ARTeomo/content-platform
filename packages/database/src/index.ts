@@ -14,16 +14,8 @@ export { TransactionManager, type Transaction } from './transaction/index.js';
 
 /**
  * Re-export the Drizzle SQL template tag.
- *
- * Consumers that need to build raw queries (e.g. the worker's
- * content-publish-service) can import `sql` from this package instead
- * of depending on `drizzle-orm` directly. This keeps the peer-resolution
- * boundary at the database package and avoids requiring `drizzle-orm` and
- * `postgres` to be declared by every consumer.
  */
 export { sql } from 'drizzle-orm';
-
-// Repositories (single re-export from the repository barrel)
 
 export {
   // Outbox
@@ -57,10 +49,16 @@ export {
   // Destinations
   DestinationsRepository,
 
-  // System configuration (Sprint A)
+  // System configuration
   SystemConfigRepository,
 
-  // Publication lifecycle (Phase 19a)
+  // Observability
+  NotificationsRepository,
+  type NotificationInput,
+  SystemLogsRepository,
+  type SystemLogInput,
+
+  // Publication lifecycle
   PublicationsRepository,
   type PublicationCreateInput,
   type PublicationStatus,
@@ -70,10 +68,11 @@ export {
   type PublicationReconciliationInput,
   type ReconciliationResult,
 
-  // Interaction response lifecycle (Phase 18b)
+  // Interaction response lifecycle
   InteractionResponsesRepository,
   type InteractionResponseInput,
   type InteractionResponseStatus,
+  type CreateIdempotentResult,
   InteractionResponseAttemptsRepository,
   type AttemptStatus,
   InteractionModerationActionsRepository,

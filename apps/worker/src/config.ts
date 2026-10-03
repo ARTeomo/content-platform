@@ -4,19 +4,11 @@
  * Values are read from the process environment. The worker does not read
  * `.env` files directly — the caller (systemd, Docker, or a local shell)
  * is responsible for loading them.
- *
- * Dynamic configuration that can change at runtime (interaction
- * response rules, templates, rate-limit budgets) is loaded from the
- * `system_config` table at startup by `RuntimeConfigLoader`. This file
- * only covers the static process environment.
  */
 
 export interface WorkerConfig {
-  /** PostgreSQL connection URL. */
   databaseUrl: string;
-  /** Upstash Redis connection URL (`rediss://...`). */
   redisUrl: string;
-  /** BullMQ queue prefix. Default: `content-platform`. */
   queuePrefix: string;
 
   // Outbox dispatcher
@@ -27,44 +19,36 @@ export interface WorkerConfig {
   outboxRecoveryIntervalSeconds: number;
   outboxCleanupRetentionDays: number;
 
+  // System.outbox.cleanup scheduler
+  /**
+   * Polling interval for the `system.outbox.cleanup` scheduler, ms.
+   * Zero disables the scheduler; cleanup must then be triggered
+   * manually by publishing to the queue.
+   */
+  systemOutboxCleanupIntervalMs: number;
+
   // Publication scheduler
   publicationScheduleIntervalMs: number;
   publicationScheduleBatchSize: number;
   publicationReconcileStaleThresholdSeconds: number;
 
-  // Interaction response scheduler (new in Sprint A)
+  // Interaction response scheduler
   interactionResponseScheduleIntervalMs: number;
   interactionResponseScheduleBatchSize: number;
   interactionResponseStaleThresholdSeconds: number;
 
+  // System rebuild
+  /** Default staleness threshold for the rebuild scan, seconds. */
+  systemRebuildStaleThresholdSeconds: number;
+  /** Default batch size for the rebuild scan. */
+  systemRebuildBatchSize: number;
+
   // Meta Graph API
   metaGraphApiVersion: string;
-  /** Meta App ID for token rotation. */
   metaAppId: string | undefined;
-  /** Meta App Secret for token rotation. */
   metaAppSecret: string | undefined;
-
-  /**
-   * Temporary fallback: Page Access Token sourced from the environment.
-   *
-   * When a destination has no DB-backed PAGE_ACCESS_TOKEN, the
-   * credential bridge falls back to this value. Deprecated — will be
-   * removed once the DB credential lifecycle is seeded for every
-   * destination. Every fallback use is logged at warn level.
-   */
   metaPageAccessToken: string | undefined;
-
-  /**
-   * Meta credential encryption key set. Required for the worker to
-   * decrypt DB-backed Page Access Tokens.
-   *
-   * Format: JSON object mapping key version -> base64 32-byte key.
-   */
   metaCredentialEncryptionKeys: Record<string, string> | undefined;
-  /**
-   * Active key version for new Meta credential encryptions. Only used
-   * by admin tooling; the worker only decrypts.
-   */
   metaCredentialEncryptionActiveVersion: number | undefined;
 }
 
@@ -120,6 +104,8 @@ export function loadWorkerConfig(): WorkerConfig {
     outboxRecoveryIntervalSeconds: optionalInt('OUTBOX_RECOVERY_INTERVAL_SECONDS', 30),
     outboxCleanupRetentionDays: optionalInt('OUTBOX_CLEANUP_RETENTION_DAYS', 7),
 
+    systemOutboxCleanupIntervalMs: optionalInt('SYSTEM_OUTBOX_CLEANUP_INTERVAL_MS', 60 * 60 * 1000),
+
     publicationScheduleIntervalMs: optionalInt('PUBLICATION_SCHEDULE_INTERVAL_MS', 30000),
     publicationScheduleBatchSize: optionalInt('PUBLICATION_SCHEDULE_BATCH_SIZE', 50),
     publicationReconcileStaleThresholdSeconds: optionalInt(
@@ -139,6 +125,9 @@ export function loadWorkerConfig(): WorkerConfig {
       'INTERACTION_RESPONSE_STALE_THRESHOLD_SECONDS',
       300,
     ),
+
+    systemRebuildStaleThresholdSeconds: optionalInt('SYSTEM_REBUILD_STALE_THRESHOLD_SECONDS', 300),
+    systemRebuildBatchSize: optionalInt('SYSTEM_REBUILD_BATCH_SIZE', 100),
 
     metaGraphApiVersion: process.env.META_GRAPH_API_VERSION ?? 'v21.0',
     metaAppId: process.env.META_APP_ID,

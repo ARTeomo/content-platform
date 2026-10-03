@@ -35,7 +35,7 @@ describe.skipIf(!TEST_DB_URL || !TEST_REDIS_URL)('OutboxDispatcher', () => {
       enableOfflineQueue: false,
     });
     redis.on('error', () => {
-      // Suppress noise; assertions will fail if the connection is bad.
+      /* suppress noise; assertions will fail if the connection is bad */
     });
   });
 
@@ -71,7 +71,6 @@ describe.skipIf(!TEST_DB_URL || !TEST_REDIS_URL)('OutboxDispatcher', () => {
         outboxDispatchMaxAttempts: 5,
         outboxDispatchStaleThresholdSeconds: 60,
         outboxRecoveryIntervalSeconds: 3600,
-        outboxCleanupRetentionDays: 7,
       },
     });
 
@@ -136,5 +135,24 @@ describe.skipIf(!TEST_DB_URL || !TEST_REDIS_URL)('OutboxDispatcher', () => {
       SELECT job_id FROM outbox_jobs
     `;
     expect(remaining.map((r) => r.job_id)).toEqual(['new']);
+  });
+
+  it('enqueue is idempotent: a second call with the same job_id is a no-op', async () => {
+    const first = await txManager.run(async (tx) =>
+      outboxRepo.enqueue(tx, { queueName, jobId: 'test-job-dup', payload: { v: 1 } }),
+    );
+    expect(first).toBe(true);
+
+    const second = await txManager.run(async (tx) =>
+      outboxRepo.enqueue(tx, { queueName, jobId: 'test-job-dup', payload: { v: 2 } }),
+    );
+    expect(second).toBe(false);
+
+    const rows = await client.sql<{ c: number; payload: Record<string, unknown> }[]>`
+      SELECT COUNT(*)::int AS c, (ARRAY_AGG(payload))[1] AS payload
+      FROM outbox_jobs WHERE job_id = 'test-job-dup'
+    `;
+    expect(rows[0]!.c).toBe(1);
+    expect(rows[0]!.payload).toEqual({ v: 1 });
   });
 });

@@ -12,7 +12,6 @@ export interface OutboxDispatcherDeps {
     | 'outboxDispatchMaxAttempts'
     | 'outboxDispatchStaleThresholdSeconds'
     | 'outboxRecoveryIntervalSeconds'
-    | 'outboxCleanupRetentionDays'
   >;
   /** Optional logger. Default: `console`. */
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -27,16 +26,18 @@ export interface OutboxDispatcherDeps {
  * 2. For each row, call `queue.add(name, payload, jobId)`.
  * 3. On success, mark the row DISPATCHED.
  * 4. On failure, mark the row PENDING (retry) or FAILED (max attempts).
- * 5. Periodically recover stale DISPATCHING rows and clean up old
- *    DISPATCHED rows.
+ * 5. Periodically recover stale DISPATCHING rows.
+ *
+ * Cleanup of old DISPATCHED rows is handled by the dedicated
+ * `system.outbox.cleanup` worker, not by this dispatcher. This keeps a
+ * single dispatcher instance from racing itself when multiple
+ * dispatchers run concurrently.
  *
  * ## Idempotency
  *
  * The `jobId` is the BullMQ deduplication key. If the dispatcher is
  * restarted after a crash, re-enqueuing the same `jobId` does not create
  * a duplicate job — BullMQ rejects the duplicate silently.
- *
- * @see DATABASE_SCHEMA_CONTRACT.md §12.4
  */
 export class OutboxDispatcher {
   private readonly outboxRepo: OutboxRepository;
@@ -45,7 +46,6 @@ export class OutboxDispatcher {
   private readonly logger: Pick<Console, 'info' | 'warn' | 'error'>;
   private stopped = false;
   private recoveryTimer: NodeJS.Timeout | null = null;
-  private cleanupTimer: NodeJS.Timeout | null = null;
 
   constructor(deps: OutboxDispatcherDeps) {
     this.outboxRepo = deps.outboxRepo;
@@ -54,13 +54,9 @@ export class OutboxDispatcher {
     this.logger = deps.logger ?? console;
   }
 
-  /**
-   * Start the dispatcher. Runs until `stop()` is called.
-   */
   async start(): Promise<void> {
     this.stopped = false;
     this.scheduleRecovery();
-    this.scheduleCleanup();
 
     this.logger.info('[outbox] dispatcher started');
 
@@ -74,20 +70,11 @@ export class OutboxDispatcher {
     this.logger.info('[outbox] dispatcher stopped');
   }
 
-  /**
-   * Stop the dispatcher. Waits for the current batch to finish.
-   */
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.recoveryTimer) clearInterval(this.recoveryTimer);
-    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
   }
 
-  /**
-   * Run a single dispatch cycle.
-   *
-   * Returns the number of rows claimed and processed.
-   */
   async dispatchOnce(): Promise<number> {
     const claimed = await this.outboxRepo.claimPendingBatch(this.config.outboxDispatchBatchSize);
     if (claimed.length === 0) return 0;
@@ -121,14 +108,6 @@ export class OutboxDispatcher {
     }, intervalMs);
   }
 
-  private scheduleCleanup(): void {
-    // Run cleanup once per hour.
-    const intervalMs = 60 * 60 * 1000;
-    this.cleanupTimer = setInterval(() => {
-      void this.cleanup();
-    }, intervalMs);
-  }
-
   private async recoverStale(): Promise<void> {
     try {
       const recovered = await this.outboxRepo.recoverStale(
@@ -140,20 +119,6 @@ export class OutboxDispatcher {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`[outbox] recovery failed: ${message}`);
-    }
-  }
-
-  private async cleanup(): Promise<void> {
-    try {
-      const deleted = await this.outboxRepo.cleanupOlderThan(
-        this.config.outboxCleanupRetentionDays,
-      );
-      if (deleted > 0) {
-        this.logger.info(`[outbox] cleaned up ${deleted} DISPATCHED rows`);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`[outbox] cleanup failed: ${message}`);
     }
   }
 }

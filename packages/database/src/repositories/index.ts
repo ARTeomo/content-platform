@@ -43,6 +43,10 @@ export { DestinationsRepository } from './destinations-repository.js';
 
 export { SystemConfigRepository } from './system-config-repository.js';
 
+export { NotificationsRepository, type NotificationInput } from './notifications-repository.js';
+
+export { SystemLogsRepository, type SystemLogInput } from './system-logs-repository.js';
+
 // Publication lifecycle
 
 export {
@@ -68,6 +72,7 @@ export {
   InteractionResponsesRepository,
   type InteractionResponseInput,
   type InteractionResponseStatus,
+  type CreateIdempotentResult,
 } from './interaction-responses-repository.js';
 
 export {

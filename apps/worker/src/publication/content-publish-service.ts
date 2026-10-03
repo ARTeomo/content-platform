@@ -7,6 +7,7 @@ import {
   type TransactionManager,
 } from '@content-platform/database';
 import type { MetaPublisherAdapter } from '@content-platform/publishers';
+import type { AlertingService } from '../observability/index.js';
 import type { ContentPublishJobData, PublicationContext, PublishOutcome } from './types.js';
 
 export interface ContentPublishServiceDeps {
@@ -15,6 +16,7 @@ export interface ContentPublishServiceDeps {
   publicationsRepo: PublicationsRepository;
   attemptsRepo: PublicationAttemptsRepository;
   publisherAdapter: MetaPublisherAdapter;
+  alerting?: AlertingService;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
@@ -35,22 +37,6 @@ interface PublicationContextRow {
   image_source_url: string | null;
 }
 
-/**
- * Orchestrates publishing a single Publication to its destination.
- *
- * State machine transitions:
- *
- *   SCHEDULED | RESERVED | RETRY  ──► IN_PROGRESS ──► PUBLISHED
- *                                                  ├──► RETRY
- *                                                  ├──► FAILED
- *                                                  └──► RECONCILIATION
- *
- * The IN_PROGRESS transition is a single atomic UPDATE ... RETURNING
- * guarded by the status predicate (see PublicationsRepository
- * .claimForPublishing). If two workers race on the same publication,
- * exactly one wins and the other returns SKIPPED without touching the
- * external API.
- */
 export class ContentPublishService {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
 
@@ -61,25 +47,19 @@ export class ContentPublishService {
   async publish(job: ContentPublishJobData): Promise<PublishOutcome> {
     const { publicationId } = job;
 
-    // 1. Load the joined context.
     const context = await this.loadContext(publicationId);
     if (!context) {
       return { status: 'SKIPPED', reason: 'publication not found' };
     }
 
-    // 2. Guard: only pre-execution states are eligible.
     const eligible =
       context.publicationStatus === 'SCHEDULED' ||
       context.publicationStatus === 'RESERVED' ||
       context.publicationStatus === 'RETRY';
     if (!eligible) {
-      return {
-        status: 'SKIPPED',
-        reason: `status is ${context.publicationStatus}`,
-      };
+      return { status: 'SKIPPED', reason: `status is ${context.publicationStatus}` };
     }
 
-    // 3. Atomically claim the publication.
     const claimed = await this.deps.txManager.run(async (tx) =>
       this.deps.publicationsRepo.claimForPublishing(tx, publicationId),
     );
@@ -87,7 +67,6 @@ export class ContentPublishService {
       return { status: 'SKIPPED', reason: 'concurrent claim lost' };
     }
 
-    // 4. Build the outbound payload.
     const message = buildMessage(context);
     const link = context.candidateSourceUrl;
     const imageUrl = context.imageResolvedUrl ?? context.imageSourceUrl ?? undefined;
@@ -98,12 +77,10 @@ export class ContentPublishService {
       imageUrl,
     });
 
-    // 5. Record the attempt (PENDING).
     const attempt = await this.deps.txManager.run(async (tx) =>
       this.deps.attemptsRepo.startAttempt(tx, publicationId),
     );
 
-    // 6. Call the adapter.
     const result = await this.deps.publisherAdapter.postToPage({
       destinationId: context.destinationId,
       pageId: context.destinationExternalId,
@@ -115,7 +92,6 @@ export class ContentPublishService {
 
     const at = new Date();
 
-    // 7. Apply the outcome.
     switch (result.status) {
       case 'SUCCESS': {
         await this.deps.txManager.run(async (tx) => {
@@ -130,6 +106,9 @@ export class ContentPublishService {
         this.log.info(
           `[content.publish] publication ${publicationId} → PUBLISHED (${result.externalPostId})`,
         );
+        if (this.deps.alerting) {
+          await this.deps.alerting.publicationPublished(publicationId, result.externalPostId);
+        }
         return { status: 'PUBLISHED', externalPostId: result.externalPostId };
       }
 
@@ -166,6 +145,13 @@ export class ContentPublishService {
         this.log.error(
           `[content.publish] publication ${publicationId} → FAILED (${result.errorCategory})`,
         );
+        if (this.deps.alerting) {
+          await this.deps.alerting.publicationFailed(
+            publicationId,
+            result.errorCategory,
+            result.errorMessage,
+          );
+        }
         return {
           status: 'FAILED',
           errorCategory: result.errorCategory,

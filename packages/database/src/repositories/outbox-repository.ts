@@ -32,39 +32,36 @@ export interface OutboxJob {
 /**
  * Repository for the transactional outbox.
  *
- * `enqueue` must be called inside a caller-controlled transaction. All
- * other methods operate on the pool directly and are used by the
- * OutboxDispatcher.
+ * `enqueue` is idempotent on `job_id`: a duplicate job with the same
+ * deterministic id is silently ignored and the method returns false.
+ * This makes the outbox safe to rebuild from durable state — the
+ * `system.rebuild` service can re-issue jobs without worrying about
+ * collisions with rows that already exist.
  */
 export class OutboxRepository {
   constructor(private readonly db: Database) {}
 
   /**
    * Enqueue a job inside a caller-controlled transaction.
+   *
+   * Returns true if the row was inserted, false if a row with the same
+   * `job_id` already existed.
    */
-  async enqueue(tx: Transaction, job: OutboxJobInput): Promise<void> {
-    await tx.insert(outboxJobs).values({
-      queueName: job.queueName,
-      jobId: job.jobId,
-      payload: job.payload,
-      ...(job.traceId !== undefined && { traceId: job.traceId }),
-    });
+  async enqueue(tx: Transaction, job: OutboxJobInput): Promise<boolean> {
+    const inserted = await tx
+      .insert(outboxJobs)
+      .values({
+        queueName: job.queueName,
+        jobId: job.jobId,
+        payload: job.payload,
+        ...(job.traceId !== undefined && { traceId: job.traceId }),
+      })
+      .onConflictDoNothing({ target: outboxJobs.jobId })
+      .returning({ id: outboxJobs.id });
+
+    return inserted.length === 1;
   }
 
-  /**
-   * Atomically claim up to `limit` PENDING rows and mark them DISPATCHING.
-   *
-   * ## Two-step pattern
-   *
-   * Step 1 uses a raw SQL CTE with `FOR UPDATE SKIP LOCKED` to claim
-   * rows atomically and returns only the `id` values. Step 2 reads the
-   * full rows via the Drizzle query builder, which returns camelCase
-   * keys matching the `$inferSelect` type.
-   *
-   * This avoids the trap of `RETURNING *` in a raw SQL query, where the
-   * returned column names are snake_case and do not match the TypeScript
-   * `$inferSelect` type.
-   */
   async claimPendingBatch(limit: number): Promise<OutboxJob[]> {
     const claimed = (await this.db.execute(sql`
       WITH claimed AS (
@@ -107,9 +104,6 @@ export class OutboxRepository {
     }));
   }
 
-  /**
-   * Mark a claimed row as successfully dispatched to BullMQ.
-   */
   async markDispatched(id: string): Promise<void> {
     await this.db
       .update(outboxJobs)
@@ -121,12 +115,6 @@ export class OutboxRepository {
       .where(eq(outboxJobs.id, id));
   }
 
-  /**
-   * Record a dispatch failure.
-   *
-   * If attempts >= maxAttempts the row becomes FAILED (terminal).
-   * Otherwise it returns to PENDING for the next dispatcher cycle.
-   */
   async markDispatchFailed(id: string, error: string, maxAttempts: number): Promise<void> {
     await this.db
       .update(outboxJobs)
@@ -137,9 +125,6 @@ export class OutboxRepository {
       .where(eq(outboxJobs.id, id));
   }
 
-  /**
-   * Restore stale DISPATCHING rows to PENDING.
-   */
   async recoverStale(thresholdSeconds: number): Promise<number> {
     const rows = await this.db
       .update(outboxJobs)
@@ -160,6 +145,9 @@ export class OutboxRepository {
 
   /**
    * Delete DISPATCHED rows older than `days`.
+   *
+   * Called by the dedicated `system.outbox.cleanup` worker, not by the
+   * dispatcher itself.
    */
   async cleanupOlderThan(days: number): Promise<number> {
     const rows = await this.db

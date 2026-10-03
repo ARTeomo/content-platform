@@ -5,11 +5,13 @@ import {
   InteractionResponseAttemptsRepository,
   InteractionResponseReconciliationsRepository,
   InteractionResponsesRepository,
+  NotificationsRepository,
   OutboxRepository,
   PublicationAttemptsRepository,
   PublicationReconciliationsRepository,
   PublicationsRepository,
   SystemConfigRepository,
+  SystemLogsRepository,
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
@@ -29,8 +31,18 @@ import {
   fallbackRuntimeConfig,
   loadRuntimeConfig,
 } from './credentials/index.js';
+import { AlertingService, NotificationService, SystemLogService } from './observability/index.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
 import { BullMqJobConsumer, BullMqJobQueue, redisOptionsFromUrl } from './queue/index.js';
+import {
+  SystemOutboxCleanupSchedulerWorker,
+  SystemOutboxCleanupService,
+  SystemOutboxCleanupWorker,
+  SystemRebuildService,
+  SystemRebuildWorker,
+  type SystemOutboxCleanupJobData,
+  type SystemRebuildJobData,
+} from './system/index.js';
 import {
   ChangeExtractorRegistry,
   FeedChangeExtractor,
@@ -75,12 +87,6 @@ async function main(): Promise<void> {
 
   const queue = new BullMqJobQueue({ redisUrl: config.redisUrl });
 
-  // Separate Redis connection for the rate limiter.
-  //
-  // The BullMQ connection is dedicated to BullMQ and uses
-  // `maxRetriesPerRequest: null` for blocking operations. The rate
-  // limiter's EVAL calls use a small, bounded retry policy so a Redis
-  // outage does not stall the worker indefinitely.
   const rateLimiterRedis = new Redis({
     ...redisOptionsFromUrl(config.redisUrl),
     maxRetriesPerRequest: 3,
@@ -104,6 +110,17 @@ async function main(): Promise<void> {
   const attemptsRepo = new InteractionResponseAttemptsRepository(db.db);
   const reconciliationsRepo = new InteractionResponseReconciliationsRepository(db.db);
   const systemConfigRepo = new SystemConfigRepository(db.db);
+  const notificationsRepo = new NotificationsRepository(db.db);
+  const systemLogsRepo = new SystemLogsRepository(db.db);
+
+  // ---- observability services ----
+
+  const notificationService = new NotificationService({ txManager, notificationsRepo });
+  const systemLogService = new SystemLogService({ txManager, systemLogsRepo });
+  const alerting = new AlertingService({
+    notifications: notificationService,
+    logs: systemLogService,
+  });
 
   // ---- runtime configuration from system_config ----
 
@@ -169,7 +186,7 @@ async function main(): Promise<void> {
 
   const dispatcher = new OutboxDispatcher({ outboxRepo, queue, config });
 
-  // ---- interaction response service (policy + template + outbox enqueue) ----
+  // ---- interaction response service ----
 
   const interactionResponseService = new InteractionResponseService({
     txManager,
@@ -220,20 +237,12 @@ async function main(): Promise<void> {
   });
 
   const metaAdapter = new MetaInteractionAdapter(
-    {
-      graphClient: metaGraphBridge,
-      rateLimiter,
-      getAccessToken,
-    },
+    { graphClient: metaGraphBridge, rateLimiter, getAccessToken },
     { apiVersion: config.metaGraphApiVersion },
   );
 
   const metaPublisherAdapter = new MetaPublisherAdapter(
-    {
-      graphClient: metaGraphBridge,
-      rateLimiter,
-      getAccessToken,
-    },
+    { graphClient: metaGraphBridge, rateLimiter, getAccessToken },
     { apiVersion: config.metaGraphApiVersion },
   );
 
@@ -309,6 +318,7 @@ async function main(): Promise<void> {
     publicationsRepo,
     attemptsRepo: publicationAttemptsRepo,
     publisherAdapter: metaPublisherAdapter,
+    alerting,
   });
 
   const contentPublishWorker = new ContentPublishWorker({
@@ -326,6 +336,7 @@ async function main(): Promise<void> {
       }),
     service: contentPublishService,
     credentialBundle,
+    alerting,
   });
 
   // ---- publication.reconcile wiring ----
@@ -390,6 +401,65 @@ async function main(): Promise<void> {
     intervalMs: config.interactionResponseScheduleIntervalMs,
   });
 
+  // ---- system.rebuild wiring ----
+
+  const systemRebuildService = new SystemRebuildService({
+    db: db.db,
+    txManager,
+    outboxRepo,
+    publicationsRepo,
+    interactionResponsesRepo: responsesRepo,
+    defaultStaleThresholdSeconds: config.systemRebuildStaleThresholdSeconds,
+    defaultLimit: config.systemRebuildBatchSize,
+  });
+
+  const systemRebuildWorker = new SystemRebuildWorker({
+    consumerFactory: (options) =>
+      new BullMqJobConsumer<SystemRebuildJobData>({
+        redisUrl: config.redisUrl,
+        queueName: options.queueName,
+        processor: options.processor,
+        onFailed: (jobId, err) => {
+          console.error(`[system.rebuild] job ${jobId ?? '<unknown>'} failed: ${err.message}`);
+        },
+        onError: (err) => {
+          console.error(`[system.rebuild] consumer error: ${err.message}`);
+        },
+      }),
+    service: systemRebuildService,
+  });
+
+  // ---- system.outbox.cleanup wiring ----
+
+  const systemOutboxCleanupService = new SystemOutboxCleanupService({
+    outboxRepo,
+    defaultRetentionDays: config.outboxCleanupRetentionDays,
+  });
+
+  const systemOutboxCleanupWorker = new SystemOutboxCleanupWorker({
+    consumerFactory: (options) =>
+      new BullMqJobConsumer<SystemOutboxCleanupJobData>({
+        redisUrl: config.redisUrl,
+        queueName: options.queueName,
+        processor: options.processor,
+        onFailed: (jobId, err) => {
+          console.error(
+            `[system.outbox.cleanup] job ${jobId ?? '<unknown>'} failed: ${err.message}`,
+          );
+        },
+        onError: (err) => {
+          console.error(`[system.outbox.cleanup] consumer error: ${err.message}`);
+        },
+      }),
+    service: systemOutboxCleanupService,
+  });
+
+  const systemOutboxCleanupSchedulerWorker = new SystemOutboxCleanupSchedulerWorker({
+    txManager,
+    outboxRepo,
+    intervalMs: config.systemOutboxCleanupIntervalMs,
+  });
+
   // ---- shutdown ----
 
   let shuttingDown = false;
@@ -397,8 +467,11 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[worker] received ${signal}, shutting down`);
+    await systemOutboxCleanupSchedulerWorker.stop();
     await interactionResponseSchedulerWorker.stop();
     await publicationSchedulerWorker.stop();
+    await systemOutboxCleanupWorker.close();
+    await systemRebuildWorker.close();
     await publicationReconcileWorker.close();
     await contentPublishWorker.close();
     await webhookRespondReconcileWorker.close();
@@ -415,6 +488,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   console.info('[worker] started');
+  systemOutboxCleanupSchedulerWorker.start();
   interactionResponseSchedulerWorker.start();
   publicationSchedulerWorker.start();
   await dispatcher.start();

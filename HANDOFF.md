@@ -3,9 +3,119 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-09-19
-**Last commit:** `37bfa40` (chore(scripts): add phase-19e operational tooling)
+**Snapshot date:** 2026-10-03
+**Last commit:** `3373895` (fix(worker): atomic claim for webhook and response creation)
 **Repository:** https://github.com/ARTeomo/content-platform
+
+---
+
+## Milestone: Phase 20 Sprint B — audit findings F1–F16 addressed
+
+The baseline audit identified 17 findings across the Sprint B scope.
+Of those, nine are closed and covered by tests. The remaining eight
+are either lower-priority operational gaps or planned for a later
+milestone. The work proceeded as five independent commits, each
+addressing one logical cluster of findings.
+
+### Commits
+
+| Commit    | Findings addressed                                |
+| --------- | ------------------------------------------------- |
+| `90e210c` | F2, F5, F6, F8, F9 — worker runtime wiring        |
+| `16675be` | F1 — webhook ingress single-transaction boundary  |
+| `b32c2cd` | F10, F13, F16 — webhook token encryption           |
+| `4849440` | F3, F4 — Redis-backed Meta rate limiters          |
+| `3373895` | F14, F15 — atomic claims for event and response   |
+
+### F1 — webhook ingress transaction boundary
+
+The POST route now performs a single database transaction per HTTP
+request. The destination lookup, the `webhook_events` insert, and the
+`outbox_jobs` enqueue all happen inside one `txManager.run()` block.
+Signature verification, JSON parsing, and Zod validation run before
+the transaction and touch no database state.
+
+### F2 — interaction response config from `system_config`
+
+`InteractionResponseService` receives its rule set, templates, and
+rate limits from the `system_config` table. A new
+`SystemConfigRepository` exposes typed reads. The worker loads
+configuration at startup and logs which keys defaulted when the DB
+is unreachable or a key is absent. Seed migration
+`0013_seed_system_config.sql` inserts the initial values.
+
+### F3 / F4 — Redis-backed Meta rate limiters
+
+`RedisMetaRateLimiter` replaces `NoopMetaRateLimiter` on both
+`MetaInteractionAdapter` (`pages_manage_engagement`) and
+`MetaPublisherAdapter` (`pages_manage_posts`). Enforcement uses a
+sliding-window sorted-set algorithm implemented as a single Lua
+script, so all three budgets (per-destination hourly, global hourly,
+global daily) are checked atomically. The limiter fails closed when
+Redis is unreachable.
+
+### F5 — DB-backed Meta credentials in the worker
+
+`MetaCredentialService` is now constructed in the worker bootstrap
+and wired into every adapter via `buildGetAccessToken`. The legacy
+`META_PAGE_ACCESS_TOKEN` environment variable remains as a
+deprecation-warned fallback while credentials are migrated. Every
+fallback use is logged at warn level.
+
+### F6 — scheduler credential-health gate
+
+`PublicationSchedulerService` consults `healthCheck(destinationId)`
+before enqueuing `content.publish`. Destinations with an INVALID
+overall credential status are moved to FAILED instead of looping on
+401 responses.
+
+### F8 — interaction response scheduler
+
+`InteractionResponseSchedulerService` and its worker close the
+lifecycle gap. SCHEDULED responses are enqueued to `webhook.respond`;
+stale IN_PROGRESS responses are enqueued to
+`webhook.respond.reconcile`. Both scans use `FOR UPDATE SKIP LOCKED`
+and perform the state change and the outbox enqueue in one
+transaction.
+
+### F9 — credential invalidation propagation
+
+`shouldInvalidateCredential` is threaded from the Meta adapters
+through `ContentPublishService` and `WebhookRespondService` to the
+workers, which call `invalidatePageAccessToken` best-effort before
+completing the job.
+
+### F10 / F13 / F16 — webhook token encryption
+
+The API no longer carries its own AES-256-GCM implementation. A new
+`WebhookTokenEncryptionProvider` in `@content-platform/authentication`
+wraps the existing `CredentialEncryptionProvider` with the webhook
+specific AAD context `META:WEBHOOK_VERIFY_TOKEN:<destinationId>`. The
+subscription's `verify_token_key_version` is read from the row and
+selects the decryption key, enabling key rotation without downtime.
+`safeEqual` provides timing-safe comparison for the incoming verify
+token.
+
+### F14 / F15 — atomic claims
+
+`WebhookEventsRepository.claimForProcessing` transitions an event
+from RECEIVED to PROCESSING in a single guarded UPDATE. A second
+worker racing on the same event sees `false` and exits without
+creating a delivery attempt.
+
+`InteractionResponsesRepository.createIdempotent` returns
+`{ row, inserted }`. The interaction response service only enqueues
+the `webhook.respond` outbox job when `inserted === true`, avoiding
+the outbox `job_id` unique-constraint collision that would otherwise
+occur under concurrency.
+
+### Findings still open
+
+| #    | Finding                                         | Planned  |
+| ---- | ----------------------------------------------- | -------- |
+| F7   | `system.rebuild` and `system.outbox.cleanup`    | Sprint C |
+| F11  | `notifications` table never written             | Sprint C |
+| F12  | `system_logs`, `audit_logs`, `ai_usage` unused  | Sprint C |
 
 ---
 
@@ -445,12 +555,12 @@ Six workspace packages:
 | `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                              | 22      |
 | `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                      | 37      |
 | `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                    | 21      |
-| `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, NoopMetaRateLimiter      | 51      |
-| `apps/worker`                   | OutboxDispatcher, publication scheduler, webhook.process, webhook.respond, content.publish, publication.reconcile workers | 73      |
-| `apps/api`                      | Fastify webhook ingress (POST + GET)                                                                                      | 4       |
-| **Total**                       |                                                                                                                           | **208** |
+| `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter     | 56      |
+| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, all queue consumers                              | 76      |
+| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                           | 8       |
+| **Total**                       |                                                                                                                           | **220** |
 
-The 208-test verification is recorded with `TEST_DATABASE_URL` and
+The 220-test verification is recorded with `TEST_DATABASE_URL` and
 `TEST_REDIS_URL` available. Without those, the DB- and Redis-backed
 tests skip.
 
@@ -552,6 +662,9 @@ against Neon PostgreSQL when `TEST_DATABASE_URL` is configured.
   atomic claim + outbox enqueue per scan.
 - `PublicationSchedulerWorker` — polling wrapper around the scheduler
   service.
+- `InteractionResponseSchedulerService` — SCHEDULED and stale
+  IN_PROGRESS interaction response orchestration.
+- `InteractionResponseSchedulerWorker` — polling wrapper.
 - `MetaCredentialService` — credential store, rotation,
   invalidation, validation, and health checks.
 - `MetaErrorMapper` — Graph API error categorization.
@@ -728,29 +841,21 @@ future environments.
 
 ## Pending items
 
-### 1. Interaction response configuration
+### 1. Temporary Meta credential fallback
 
-`apps/worker/src/index.ts` currently uses:
+`MetaCredentialService` is now wired into the worker. The
+`META_PAGE_ACCESS_TOKEN` environment variable remains as a
+deprecation-warned fallback for destinations that do not yet have
+a DB-backed credential. Every fallback use is logged at warn
+level. Remove the fallback path once every destination has a
+`provider_credentials` row.
 
-- `DEFAULT_INTERACTION_RESPONSE_CONFIG` — empty rule set,
-  fail-closed;
-- `DEFAULT_TEMPLATES` — empty map.
+### 2. Secret rotation (unchanged)
 
-Real configuration must eventually be loaded from `system_config`
-under:
-
-- `interaction_response_rules`;
-- `interaction_response_templates`.
-
-### 2. Temporary Meta credential shortcut
-
-The worker currently obtains the Meta Page access token from
-`META_PAGE_ACCESS_TOKEN`. This bypasses the DB-backed encrypted
-`MetaCredentialService` path for worker Graph API calls.
-
-The encrypted credential lifecycle exists, but the worker-side
-publishing, interaction-response, and publication-reconciliation
-wiring still use the environment token shortcut.
+See "Meta App configuration" section for the full rotation list.
+The Meta App Secret, the ngrok authtoken, the System User token,
+and the derived Page Access Token all appeared in the development
+chat and must be rotated before external collaboration.
 
 ### 3. `destinations.trust_level`
 
@@ -846,6 +951,12 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
     (`claimForPublishing`) to move a row to `IN_PROGRESS`. Two
     separate unguarded updates are not sufficient and can produce a
     duplicate external post under concurrency.
+14. Every Meta Graph API call must pass through a `MetaRateLimiter`
+    or `MetaPublishRateLimiter` before the HTTP request is issued.
+    The limiter enforces per-destination, global hourly, and global
+    daily budgets atomically. The limiter fails closed when Redis is
+    unreachable: an inability to prove compliance is treated as a
+    denial.
 
 ---
 

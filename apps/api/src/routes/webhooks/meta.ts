@@ -4,6 +4,7 @@ import {
   OutboxRepository,
   TransactionManager,
   WebhookEventsRepository,
+  sql,
   type DatabaseClient,
 } from '@content-platform/database';
 import { verifyMetaSignature } from './signature.js';
@@ -87,17 +88,22 @@ export async function metaWebhookRoutes(
     const externalObjectId = envelope.entry[0]?.id ?? 'unknown';
     const field = envelope.entry[0]?.changes[0]?.field;
 
-    // Resolve the destination from the Meta Page ID (`entry[0].id`).
-    // The Meta test button sends `"0"`, real events send the numeric Page ID.
-    const [destinationRow] = await client.sql<{ id: string }[]>`
-      SELECT id FROM destinations
-      WHERE type = 'META' AND external_id = ${externalObjectId}
-      LIMIT 1
-    `;
-    const destinationId = destinationRow?.id ?? null;
-
+    // Single database transaction per HTTP request:
+    //   1. Resolve the destination from the Meta Page ID.
+    //   2. Insert webhook_events idempotently.
+    //   3. Enqueue outbox job if the event was newly inserted.
+    //
+    // Fail-closed: any failure rolls back all three steps and the
+    // caller receives 500. No Redis call on the hot path.
     try {
       await txManager.run(async (tx) => {
+        const destinationRows = (await tx.execute(sql`
+          SELECT id FROM destinations
+          WHERE type = 'META' AND external_id = ${externalObjectId}
+          LIMIT 1
+        `)) as unknown as Array<{ id: string }>;
+        const destinationId = destinationRows[0]?.id ?? null;
+
         const result = await eventsRepo.insertIdempotent(tx, {
           provider: 'META',
           objectType: envelope.object,

@@ -7,15 +7,20 @@ overrides:
   drizzle-kit: 0.31.10
   typescript: 7.0.2
 
-# Restrict platform-specific optional dependencies to the current
-# platform only. Without this, `pnpm install --force` downloads every
-# platform variant (linux-arm64, darwin-x64, win32-arm64, ...) even
-# though they are never used on the development machine.
+# Resolve optional native dependencies for multiple platforms so that
+# the same lockfile works on Windows (local development), Linux (CI),
+# and macOS (future contributors). At install time, pnpm downloads only
+# the variant matching the current process.platform / process.arch; the
+# other entries are still recorded in pnpm-lock.yaml, which is what
+# allows `--frozen-lockfile` to succeed on every platform.
 supportedArchitectures:
   os:
     - win32
+    - linux
+    - darwin
   cpu:
     - x64
+    - arm64
 
 allowBuilds:
   esbuild: true

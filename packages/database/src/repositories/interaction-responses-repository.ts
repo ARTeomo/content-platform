@@ -31,6 +31,12 @@ export interface InteractionResponseInput {
   scheduledAt?: Date;
 }
 
+export interface CreateIdempotentResult {
+  row: InteractionResponseRow;
+  /** True if this call performed the insert. False if an existing row was reused. */
+  inserted: boolean;
+}
+
 export class InteractionResponsesRepository {
   constructor(private readonly db: Database) {}
 
@@ -52,17 +58,18 @@ export class InteractionResponsesRepository {
   }
 
   /**
-   * Idempotent create: inserts only if no response exists for the
-   * interaction, otherwise returns the existing row.
+   * Idempotent insert: transitions the interaction to a response row
+   * exactly once, even under concurrent callers.
    *
-   * Used by the policy path where two concurrent `decide()` calls for
-   * the same interaction must converge on the same response row
-   * without raising a unique-constraint error.
+   * The `inserted` flag lets the caller decide whether to enqueue the
+   * follow-up outbox job. Enqueuing unconditionally would produce a
+   * unique-constraint violation on `outbox_jobs.job_id`, because the
+   * job id is derived from the response id.
    */
   async createIdempotent(
     tx: Transaction,
     input: InteractionResponseInput,
-  ): Promise<InteractionResponseRow> {
+  ): Promise<CreateIdempotentResult> {
     const [inserted] = await tx
       .insert(interactionResponses)
       .values({
@@ -77,7 +84,7 @@ export class InteractionResponsesRepository {
       .onConflictDoNothing({ target: interactionResponses.interactionId })
       .returning();
 
-    if (inserted) return inserted;
+    if (inserted) return { row: inserted, inserted: true };
 
     const [existing] = await tx
       .select()
@@ -90,7 +97,7 @@ export class InteractionResponsesRepository {
         'createIdempotent reported conflict but no matching interaction_responses row was found',
       );
     }
-    return existing;
+    return { row: existing, inserted: false };
   }
 
   async findById(id: string): Promise<InteractionResponseRow | undefined> {
@@ -205,13 +212,6 @@ export class InteractionResponsesRepository {
       .where(eq(interactionResponses.id, id));
   }
 
-  /**
-   * Atomically claim due SCHEDULED responses for delivery.
-   *
-   * Moves rows from SCHEDULED to QUEUED. Only rows whose `scheduled_at`
-   * is <= now are claimed. Uses `FOR UPDATE SKIP LOCKED` so concurrent
-   * scheduler instances do not claim the same row.
-   */
   async claimDueScheduled(tx: Transaction, limit: number): Promise<string[]> {
     const rows = (await tx.execute(sql`
       WITH claimed AS (
@@ -232,11 +232,6 @@ export class InteractionResponsesRepository {
     return rows.map((r) => r.id);
   }
 
-  /**
-   * Read-only diagnostic: list stale IN_PROGRESS response IDs without
-   * claiming them. Prefer `touchStaleInProgress` inside the scheduler
-   * transaction.
-   */
   async findStaleInProgress(thresholdSeconds: number, limit: number): Promise<string[]> {
     const rows = (await this.db.execute(sql`
       SELECT id FROM interaction_responses
@@ -248,13 +243,6 @@ export class InteractionResponsesRepository {
     return rows.map((r) => r.id);
   }
 
-  /**
-   * Atomically claim stale IN_PROGRESS rows by touching `updated_at`.
-   *
-   * Used inside a transaction by the interaction response scheduler so
-   * that the outbox enqueue and the "we have seen this row" marker are
-   * committed together.
-   */
   async touchStaleInProgress(
     tx: Transaction,
     thresholdSeconds: number,

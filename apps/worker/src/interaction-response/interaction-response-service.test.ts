@@ -90,6 +90,36 @@ function makeEnv(): FakeEnv {
       rows.push(row);
       return row;
     },
+    async createIdempotent(
+      _tx: unknown,
+      input: {
+        interactionId: string;
+        destinationId: string;
+        templateId?: string;
+        body?: string;
+        status?: string;
+      },
+    ): Promise<{ row: FakeResponseRow; inserted: boolean }> {
+      const existing = rows.find((r) => r.interactionId === input.interactionId);
+      if (existing) return { row: existing, inserted: false };
+
+      const row: FakeResponseRow = {
+        id: `resp-${rows.length + 1}`,
+        interactionId: input.interactionId,
+        destinationId: input.destinationId,
+        templateId: input.templateId ?? null,
+        templateVersion: 1,
+        body: input.body ?? null,
+        status: input.status ?? 'DRAFT',
+        scheduledAt: null,
+        respondedAt: null,
+        externalResponseId: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      rows.push(row);
+      return { row, inserted: true };
+    },
   } as unknown as InteractionResponsesRepository;
 
   const outbox = {
@@ -320,6 +350,68 @@ describe('InteractionResponseService.decide', () => {
     }
     expect(env.rows).toHaveLength(1);
     expect(env.enqueued).toEqual([]);
+  });
+
+  it('does not enqueue a second outbox job when createIdempotent reuses an existing row', async () => {
+    const env = makeEnv();
+    // Pre-populate a row to force createIdempotent to take the
+    // "existing" branch on the first createResponse call.
+    env.rows.push({
+      id: 'resp-pre-existing',
+      interactionId: 'int-1',
+      destinationId: 'dest-1',
+      templateId: null,
+      templateVersion: 1,
+      body: null,
+      status: 'MODERATION_REQUIRED',
+      scheduledAt: null,
+      respondedAt: null,
+      externalResponseId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    // Remove the pre-existing row from findByInteractionId's view so
+    // the service proceeds into createResponse.
+    const originalFindByInteractionId = env.repo.findByInteractionId.bind(env.repo);
+    env.repo.findByInteractionId = async (_id: string) => {
+      // Return undefined the first time only.
+      return undefined;
+    };
+
+    const service = new InteractionResponseService({
+      txManager: makeTxManager(),
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    const outcome = await service.decide({
+      interaction: interaction(),
+      destination: destination(),
+      publication: null,
+      config: {
+        rules: [
+          {
+            id: 'thanks',
+            priority: 1,
+            action: 'AUTO_RESPOND',
+            templateId: 'thanks-template',
+            match: { keywords: ['thanks'] },
+          },
+        ],
+        maxResponsesPerHour: 20,
+        minIntervalSeconds: 30,
+      },
+      templates,
+    });
+
+    // createIdempotent detected the pre-existing row and did not
+    // insert a new one, so the outbox job was not enqueued.
+    expect(outcome.kind).toBe('AUTO_RESPOND');
+    expect(env.enqueued).toEqual([]);
+    expect(env.rows).toHaveLength(1);
+
+    env.repo.findByInteractionId = originalFindByInteractionId;
   });
 
   it('produces a deterministic requestPayloadHash', () => {

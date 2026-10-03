@@ -237,7 +237,7 @@ export class InteractionResponseService {
     enqueueRespondJob?: boolean;
   }): Promise<string> {
     const row = await this.deps.txManager.run(async (tx) => {
-      const created = await this.deps.responsesRepo.create(tx, {
+      const { row: created, inserted } = await this.deps.responsesRepo.createIdempotent(tx, {
         interactionId: input.interactionId,
         destinationId: input.destinationId,
         status: input.status,
@@ -245,7 +245,11 @@ export class InteractionResponseService {
         ...(input.body !== undefined && { body: input.body }),
       });
 
-      if (input.enqueueRespondJob === true) {
+      // Only the worker that actually inserted the row enqueues the
+      // outbox job. The job id is derived from the response id, so a
+      // second enqueue would violate the outbox job_id unique
+      // constraint and roll back the transaction.
+      if (inserted && input.enqueueRespondJob === true) {
         await this.deps.outboxRepo.enqueue(tx, {
           queueName: 'webhook.respond',
           jobId: `webhook.respond:${created.id}`,

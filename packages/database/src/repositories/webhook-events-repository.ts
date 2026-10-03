@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { webhookEvents } from '../schema/webhook/webhook-events.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -28,6 +28,12 @@ export interface InsertResult {
  * inside a caller-controlled transaction. It is the entry point for the
  * webhook ingress and its return value determines whether the caller
  * should enqueue an outbox job.
+ *
+ * The processing claim is `claimForProcessing`: an atomic transition
+ * from RECEIVED to PROCESSING guarded by a status predicate. Exactly
+ * one caller wins for any given event, which prevents the delivery
+ * attempt-number collision that would otherwise occur when two workers
+ * process the same event in parallel.
  */
 export class WebhookEventsRepository {
   constructor(private readonly db: Database) {}
@@ -35,9 +41,6 @@ export class WebhookEventsRepository {
   /**
    * Insert a new webhook event, or return the existing one if the
    * idempotency key already exists.
-   *
-   * Must be called inside a caller-controlled transaction so the caller
-   * can atomically enqueue an outbox job when `inserted` is true.
    */
   async insertIdempotent(tx: Transaction, input: WebhookEventInput): Promise<InsertResult> {
     const inserted = await tx
@@ -84,6 +87,33 @@ export class WebhookEventsRepository {
     return row;
   }
 
+  /**
+   * Atomically transition an event from RECEIVED to PROCESSING.
+   *
+   * Returns true if this call performed the transition. Returns false
+   * if another worker claimed the event first, or if the event is no
+   * longer in RECEIVED (already PROCESSING, PROCESSED, FAILED, or
+   * DEAD_LETTER).
+   *
+   * This is the concurrency control point for the webhook processing
+   * pipeline: two workers starting the same event at the same time each
+   * call this method, and exactly one wins.
+   */
+  async claimForProcessing(tx: Transaction, id: string): Promise<boolean> {
+    const rows = await tx
+      .update(webhookEvents)
+      .set({ status: 'PROCESSING', updatedAt: new Date() })
+      .where(and(eq(webhookEvents.id, id), eq(webhookEvents.status, 'RECEIVED')))
+      .returning({ id: webhookEvents.id });
+    return rows.length === 1;
+  }
+
+  /**
+   * Force-set an event to PROCESSING without a status guard.
+   *
+   * Reserved for administrative recovery paths (system.rebuild).
+   * The webhook processing pipeline must use `claimForProcessing`.
+   */
   async markProcessing(tx: Transaction, id: string): Promise<void> {
     await tx
       .update(webhookEvents)

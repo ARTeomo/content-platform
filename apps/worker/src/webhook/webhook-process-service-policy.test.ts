@@ -140,8 +140,11 @@ function build(args: {
     async findById(id: string): Promise<FakeEventRow | undefined> {
       return id === event.id ? event : undefined;
     },
-    async markProcessing(_tx: unknown, id: string): Promise<void> {
-      if (id === event.id) event.status = 'PROCESSING';
+    async claimForProcessing(_tx: unknown, id: string): Promise<boolean> {
+      if (id !== event.id) return false;
+      if (event.status !== 'RECEIVED') return false;
+      event.status = 'PROCESSING';
+      return true;
     },
     async markProcessed(_tx: unknown, id: string): Promise<void> {
       if (id === event.id) event.status = 'PROCESSED';
@@ -413,5 +416,15 @@ describe('WebhookProcessService policy integration', () => {
     await h.service.processEvent('evt-1');
     expect(h.markRespondedSpy).not.toHaveBeenCalled();
     expect(h.decideSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the event when the concurrent claim is lost', async () => {
+    const h = build({ event: { status: 'PROCESSING' } });
+    const outcome = await h.service.processEvent('evt-1');
+    expect(outcome.status).toBe('SKIPPED');
+    if (outcome.status === 'SKIPPED') {
+      expect(outcome.reason).toBe('concurrent claim lost');
+    }
+    expect(h.decideSpy).not.toHaveBeenCalled();
   });
 });

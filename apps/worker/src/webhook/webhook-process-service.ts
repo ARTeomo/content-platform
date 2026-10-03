@@ -73,13 +73,22 @@ export class WebhookProcessService {
       return { status: 'SKIPPED', reason: 'dead letter' };
     }
 
+    // Atomic claim: exactly one worker can transition RECEIVED →
+    // PROCESSING. A second worker on the same event loses the race and
+    // exits without creating a delivery attempt (which would violate
+    // the (webhook_event_id, attempt_number) unique constraint).
     const delivery = await txManager.run(async (tx) => {
-      await eventsRepo.markProcessing(tx, event.id);
+      const claimed = await eventsRepo.claimForProcessing(tx, event.id);
+      if (!claimed) return null;
       return await deliveriesRepo.startAttempt(tx, {
         webhookEventId: event.id,
         workerId: 'webhook.process',
       });
     });
+
+    if (!delivery) {
+      return { status: 'SKIPPED', reason: 'concurrent claim lost' };
+    }
 
     if (!event.destinationId) {
       await this.failDelivery(
@@ -155,10 +164,7 @@ export class WebhookProcessService {
 
             const interaction = upsertResult.interaction;
 
-            // Push-reconciliation: the actor is our own Page. This means
-            // the interaction is one of our own outbound replies coming
-            // back as an inbound feed event. Match it to an existing
-            // response and mark RESPONDED; never run the policy decision.
+            // Push-reconciliation: the actor is our own Page.
             if (
               interaction.actorExternalId !== null &&
               interaction.actorExternalId === destination.externalId

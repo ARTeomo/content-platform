@@ -30,3 +30,12 @@ export type {
   TemplateMap,
 } from './types.js';
 export { buildPolicyInput } from './types.js';
+
+// Scheduler (new in Sprint A)
+export { InteractionResponseSchedulerService } from './interaction-response-scheduler-service.js';
+export type {
+  InteractionResponseSchedulerServiceDeps,
+  InteractionResponseSchedulerRunResult,
+} from './interaction-response-scheduler-service.js';
+export { InteractionResponseSchedulerWorker } from './interaction-response-scheduler-worker.js';
+export type { InteractionResponseSchedulerWorkerOptions } from './interaction-response-scheduler-worker.js';

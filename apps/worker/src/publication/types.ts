@@ -19,6 +19,8 @@ export type PublishOutcome =
       status: 'FAILED';
       errorCategory: string;
       shouldInvalidateCredential: boolean;
+      /** Destination whose credential may need invalidation. */
+      destinationId: string;
     }
   | {
       status: 'RECONCILIATION';

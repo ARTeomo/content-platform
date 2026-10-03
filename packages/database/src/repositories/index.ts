@@ -41,7 +41,9 @@ export {
 
 export { DestinationsRepository } from './destinations-repository.js';
 
-// Publication lifecycle (Phase 19a)
+export { SystemConfigRepository } from './system-config-repository.js';
+
+// Publication lifecycle
 
 export {
   PublicationsRepository,
@@ -60,7 +62,7 @@ export {
   type ReconciliationResult,
 } from './publication-reconciliations-repository.js';
 
-// Interaction response lifecycle (Phase 18b)
+// Interaction response lifecycle
 
 export {
   InteractionResponsesRepository,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { MetaCredentialServiceBundle } from '../credentials/meta-credential-bridge.js';
 import { WebhookRespondWorker, WEBHOOK_RESPOND_QUEUE } from './webhook-respond-worker.js';
 import type { RespondOutcome, WebhookRespondService } from './webhook-respond-service.js';
 import type { WebhookRespondJobData } from './webhook-respond-worker.js';
@@ -41,12 +42,26 @@ function makeService(outcome: RespondOutcome): WebhookRespondService {
   } as unknown as WebhookRespondService;
 }
 
+/**
+ * In-memory credential bundle used by the worker tests.
+ *
+ * `available: false` means `invalidatePageAccessToken` logs at warn
+ * level and returns without touching the database. This keeps the
+ * tests free of a real credential service while still exercising the
+ * worker's code path that calls it.
+ */
+const TEST_CREDENTIAL_BUNDLE: MetaCredentialServiceBundle = {
+  available: false,
+  unavailableReason: 'test mode — no credential service',
+};
+
 function build(outcome: RespondOutcome) {
   const fake = makeFakeFactory();
   const service = makeService(outcome);
   const worker = new WebhookRespondWorker({
     consumerFactory: fake.factory,
     service,
+    credentialBundle: TEST_CREDENTIAL_BUNDLE,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   });
   const captured = fake.getCaptured();
@@ -75,11 +90,26 @@ describe('WebhookRespondWorker', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('does not throw on FAILED', async () => {
+  it('does not throw on FAILED without credential invalidation', async () => {
     const { captured } = build({
       kind: 'FAILED',
       errorCategory: 'CONTENT_REJECTED',
       errorMessage: 'policy',
+      shouldInvalidateCredential: false,
+      destinationId: 'dest-1',
+    });
+    await expect(
+      captured.processor({ id: 'job-1', data: { responseId: 'resp-1' } }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not throw on FAILED with credential invalidation requested', async () => {
+    const { captured } = build({
+      kind: 'FAILED',
+      errorCategory: 'AUTHENTICATION_ERROR',
+      errorMessage: 'token expired',
+      shouldInvalidateCredential: true,
+      destinationId: 'dest-1',
     });
     await expect(
       captured.processor({ id: 'job-1', data: { responseId: 'resp-1' } }),
@@ -137,6 +167,7 @@ describe('WebhookRespondWorker', () => {
     new WebhookRespondWorker({
       consumerFactory: fake.factory,
       service,
+      credentialBundle: TEST_CREDENTIAL_BUNDLE,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const captured = fake.getCaptured();

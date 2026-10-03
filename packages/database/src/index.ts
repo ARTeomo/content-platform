@@ -57,6 +57,9 @@ export {
   // Destinations
   DestinationsRepository,
 
+  // System configuration (Sprint A)
+  SystemConfigRepository,
+
   // Publication lifecycle (Phase 19a)
   PublicationsRepository,
   type PublicationCreateInput,

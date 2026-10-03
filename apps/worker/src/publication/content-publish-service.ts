@@ -50,8 +50,6 @@ interface PublicationContextRow {
  * .claimForPublishing). If two workers race on the same publication,
  * exactly one wins and the other returns SKIPPED without touching the
  * external API.
- *
- * Called by the `content.publish` worker for one publication per job.
  */
 export class ContentPublishService {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
@@ -70,16 +68,6 @@ export class ContentPublishService {
     }
 
     // 2. Guard: only pre-execution states are eligible.
-    //
-    //    RESERVED is the state set by the Phase 19d publication
-    //    scheduler after it claims a due SCHEDULED row and enqueues the
-    //    content.publish job. SCHEDULED remains eligible for the
-    //    system.rebuild recovery path. RETRY is the re-enqueue path
-    //    after a transient failure.
-    //
-    //    Everything else (IN_PROGRESS, PUBLISHED, FAILED, RECONCILIATION)
-    //    is either already in flight or terminal, and must not be
-    //    re-executed by this worker.
     const eligible =
       context.publicationStatus === 'SCHEDULED' ||
       context.publicationStatus === 'RESERVED' ||
@@ -92,13 +80,6 @@ export class ContentPublishService {
     }
 
     // 3. Atomically claim the publication.
-    //
-    //    Single UPDATE ... RETURNING, guarded by the status predicate.
-    //    If a concurrent worker, a BullMQ retry, or a system.rebuild
-    //    re-enqueue races us, exactly one side wins and the other gets
-    //    `false`. The loser must exit here without calling the external
-    //    API — otherwise two posts would be published for the same
-    //    candidate.
     const claimed = await this.deps.txManager.run(async (tx) =>
       this.deps.publicationsRepo.claimForPublishing(tx, publicationId),
     );
@@ -189,6 +170,7 @@ export class ContentPublishService {
           status: 'FAILED',
           errorCategory: result.errorCategory,
           shouldInvalidateCredential: result.shouldInvalidateCredential ?? false,
+          destinationId: context.destinationId,
         };
       }
 
@@ -212,11 +194,6 @@ export class ContentPublishService {
     }
   }
 
-  /**
-   * Load the publication and everything needed to build the outbound
-   * post. Single SQL query with joins; returns undefined if the
-   * publication does not exist.
-   */
   private async loadContext(publicationId: string): Promise<PublicationContext | undefined> {
     const rows = (await this.deps.db.execute(sql`
       SELECT
@@ -264,23 +241,12 @@ export class ContentPublishService {
   }
 }
 
-/**
- * Build the outbound post message from the candidate.
- *
- * DB v1 uses the candidate's caption as the message body. If caption is
- * empty, the summary is used. If both are empty, the title is used.
- * The source URL is passed separately as the `link` field.
- */
 function buildMessage(context: PublicationContext): string {
   if (context.candidateCaption.length > 0) return context.candidateCaption;
   if (context.candidateSummary.length > 0) return context.candidateSummary;
   return context.candidateTitle;
 }
 
-/**
- * Deterministic hash of the outbound payload. Used as
- * request_payload_hash on the attempt record for reconciliation.
- */
 function hashOutboundPayload(input: {
   pageId: string;
   message: string;

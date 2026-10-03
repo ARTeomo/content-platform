@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { publications } from '../schema/publication/publications.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -13,19 +13,6 @@ export interface PublicationCreateInput {
   scheduledAt?: Date;
 }
 
-/**
- * Repository for publication intent and its state machine.
- *
- * State machine:
- *
- *   SCHEDULED ──► RESERVED ──► IN_PROGRESS ──► PUBLISHED
- *                                                 ├──► RETRY
- *                                                 ├──► FAILED
- *                                                 └──► RECONCILIATION
- *
- * Unknown external outcomes are represented by RECONCILIATION and must
- * not automatically become ordinary failures.
- */
 export class PublicationsRepository {
   constructor(private readonly db: Database) {}
 
@@ -49,14 +36,28 @@ export class PublicationsRepository {
   }
 
   /**
-   * Hot path for webhook processing: resolve a publication from the
-   * Meta-side post ID. Served by the partial index
-   * publications_external_post_id_idx.
-   *
-   * Returns `null` when no match is found (not `undefined`), so the
-   * result can be used directly as the `resolvePublicationId` return
-   * value in the change extractor context.
+   * Batch lookup: for a set of publication IDs, return a map of
+   * id -> destinationId. Used by the scheduler to perform a single
+   * credential health check per destination instead of per publication.
    */
+  async findDestinationIdsByIds(
+    tx: Transaction,
+    ids: readonly string[],
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (ids.length === 0) return result;
+
+    const rows = await tx
+      .select({ id: publications.id, destinationId: publications.destinationId })
+      .from(publications)
+      .where(inArray(publications.id, [...ids]));
+
+    for (const row of rows) {
+      result.set(row.id, row.destinationId);
+    }
+    return result;
+  }
+
   async findIdByExternalPostId(
     externalPostId: string,
     destinationId?: string,
@@ -118,10 +119,6 @@ export class PublicationsRepository {
       .limit(limit);
   }
 
-  /**
-   * Idempotency check: does a publication already exist for this
-   * candidate + destination pair with a confirmed external post ID?
-   */
   async existsByCandidateAndDestination(
     publicationCandidateId: string,
     destinationId: string,
@@ -143,24 +140,9 @@ export class PublicationsRepository {
   /**
    * Atomically claim a publication for outbound execution.
    *
-   * Transitions the publication to IN_PROGRESS from any of its
-   * pre-execution states:
-   *
-   *   SCHEDULED   — direct enqueue (system.rebuild recovery path)
-   *   RESERVED    — claimed by the publication scheduler (Phase 19d)
-   *   RETRY       — re-enqueue after a transient failure
-   *
-   * The claim is a single UPDATE ... RETURNING guarded by the status
-   * predicate. It returns `true` iff exactly one row was updated. A
-   * concurrent claimer (another worker, a BullMQ retry, or a
-   * system.rebuild re-enqueue) loses the race and gets `false`; it must
-   * then exit without touching the external API.
-   *
-   * This is the only correct way to start a publication execution.
-   * markReserved() + markInProgress() as separate statements are NOT
-   * safe for this purpose — they have no status guard, and a race
-   * between two workers would let both proceed to the adapter, producing
-   * a duplicate external post.
+   * Single UPDATE ... RETURNING guarded by the status predicate.
+   * Exactly one claimer wins; concurrent claimers get `false` and must
+   * exit without touching the external API.
    */
   async claimForPublishing(tx: Transaction, id: string): Promise<boolean> {
     const rows = (await tx.execute(sql`
@@ -174,11 +156,6 @@ export class PublicationsRepository {
     return rows.length === 1;
   }
 
-  /**
-   * @deprecated Not safe for publication claiming. Use
-   * claimForPublishing() instead. Kept only for any historical caller
-   * that has not yet been migrated.
-   */
   async markReserved(tx: Transaction, id: string): Promise<void> {
     await tx
       .update(publications)
@@ -186,11 +163,6 @@ export class PublicationsRepository {
       .where(eq(publications.id, id));
   }
 
-  /**
-   * @deprecated Not safe for publication claiming. Use
-   * claimForPublishing() instead. Kept only for any historical caller
-   * that has not yet been migrated.
-   */
   async markInProgress(tx: Transaction, id: string): Promise<void> {
     await tx
       .update(publications)
@@ -236,16 +208,6 @@ export class PublicationsRepository {
       .where(eq(publications.id, id));
   }
 
-  /**
-   * Atomically claim due SCHEDULED publications for scheduling.
-   *
-   * Moves rows from SCHEDULED to RESERVED. Only rows whose scheduled_at
-   * is <= now are claimed. Uses FOR UPDATE SKIP LOCKED so concurrent
-   * scheduler instances do not claim the same row.
-   *
-   * The caller is expected to enqueue the corresponding outbox job in
-   * the same transaction. Returned IDs are ordered by scheduled_at.
-   */
   async claimDueScheduled(tx: Transaction, limit: number): Promise<string[]> {
     const rows = (await tx.execute(sql`
       WITH claimed AS (
@@ -266,16 +228,6 @@ export class PublicationsRepository {
     return rows.map((r) => r.id);
   }
 
-  /**
-   * Touch stale RECONCILIATION publications.
-   *
-   * Updates updated_at = now() as the "last scheduled for reconciliation"
-   * marker so the next scan skips these rows. Uses FOR UPDATE SKIP
-   * LOCKED so concurrent scheduler instances do not touch the same row.
-   *
-   * Returns the touched publication IDs. The caller is expected to
-   * enqueue the corresponding outbox job in the same transaction.
-   */
   async touchStaleReconciliation(
     tx: Transaction,
     thresholdSeconds: number,

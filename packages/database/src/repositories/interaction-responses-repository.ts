@@ -51,6 +51,48 @@ export class InteractionResponsesRepository {
     return row;
   }
 
+  /**
+   * Idempotent create: inserts only if no response exists for the
+   * interaction, otherwise returns the existing row.
+   *
+   * Used by the policy path where two concurrent `decide()` calls for
+   * the same interaction must converge on the same response row
+   * without raising a unique-constraint error.
+   */
+  async createIdempotent(
+    tx: Transaction,
+    input: InteractionResponseInput,
+  ): Promise<InteractionResponseRow> {
+    const [inserted] = await tx
+      .insert(interactionResponses)
+      .values({
+        interactionId: input.interactionId,
+        destinationId: input.destinationId,
+        ...(input.templateId !== undefined && { templateId: input.templateId }),
+        ...(input.templateVersion !== undefined && { templateVersion: input.templateVersion }),
+        ...(input.body !== undefined && { body: input.body }),
+        status: input.status ?? 'DRAFT',
+        ...(input.scheduledAt !== undefined && { scheduledAt: input.scheduledAt }),
+      })
+      .onConflictDoNothing({ target: interactionResponses.interactionId })
+      .returning();
+
+    if (inserted) return inserted;
+
+    const [existing] = await tx
+      .select()
+      .from(interactionResponses)
+      .where(eq(interactionResponses.interactionId, input.interactionId))
+      .limit(1);
+
+    if (!existing) {
+      throw new Error(
+        'createIdempotent reported conflict but no matching interaction_responses row was found',
+      );
+    }
+    return existing;
+  }
+
   async findById(id: string): Promise<InteractionResponseRow | undefined> {
     const [row] = await this.db
       .select()
@@ -69,11 +111,6 @@ export class InteractionResponsesRepository {
     return row;
   }
 
-  /**
-   * Push-reconciliation lookup: when the platform's own reply reappears
-   * as a feed webhook, the incoming `external_interaction_id` equals the
-   * `external_response_id` we stored on the response.
-   */
   async findByDestinationAndExternalResponseId(
     destinationId: string,
     externalResponseId: string,
@@ -166,6 +203,78 @@ export class InteractionResponsesRepository {
       .update(interactionResponses)
       .set({ status: 'RETRY', updatedAt: new Date() })
       .where(eq(interactionResponses.id, id));
+  }
+
+  /**
+   * Atomically claim due SCHEDULED responses for delivery.
+   *
+   * Moves rows from SCHEDULED to QUEUED. Only rows whose `scheduled_at`
+   * is <= now are claimed. Uses `FOR UPDATE SKIP LOCKED` so concurrent
+   * scheduler instances do not claim the same row.
+   */
+  async claimDueScheduled(tx: Transaction, limit: number): Promise<string[]> {
+    const rows = (await tx.execute(sql`
+      WITH claimed AS (
+        SELECT id FROM interaction_responses
+        WHERE status = 'SCHEDULED'
+          AND scheduled_at IS NOT NULL
+          AND scheduled_at <= now()
+        ORDER BY scheduled_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE interaction_responses
+      SET status = 'QUEUED',
+          updated_at = now()
+      WHERE id IN (SELECT id FROM claimed)
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Read-only diagnostic: list stale IN_PROGRESS response IDs without
+   * claiming them. Prefer `touchStaleInProgress` inside the scheduler
+   * transaction.
+   */
+  async findStaleInProgress(thresholdSeconds: number, limit: number): Promise<string[]> {
+    const rows = (await this.db.execute(sql`
+      SELECT id FROM interaction_responses
+      WHERE status = 'IN_PROGRESS'
+        AND updated_at < now() - interval '${sql.raw(String(thresholdSeconds))} seconds'
+      ORDER BY updated_at ASC
+      LIMIT ${limit}
+    `)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Atomically claim stale IN_PROGRESS rows by touching `updated_at`.
+   *
+   * Used inside a transaction by the interaction response scheduler so
+   * that the outbox enqueue and the "we have seen this row" marker are
+   * committed together.
+   */
+  async touchStaleInProgress(
+    tx: Transaction,
+    thresholdSeconds: number,
+    limit: number,
+  ): Promise<string[]> {
+    const rows = (await tx.execute(sql`
+      WITH claimed AS (
+        SELECT id FROM interaction_responses
+        WHERE status = 'IN_PROGRESS'
+          AND updated_at < now() - interval '${sql.raw(String(thresholdSeconds))} seconds'
+        ORDER BY updated_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE interaction_responses
+      SET updated_at = now()
+      WHERE id IN (SELECT id FROM claimed)
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
   }
 
   async findScheduledDue(now: Date, limit: number): Promise<InteractionResponseRow[]> {

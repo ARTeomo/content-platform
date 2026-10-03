@@ -9,6 +9,7 @@ import {
   PublicationAttemptsRepository,
   PublicationReconciliationsRepository,
   PublicationsRepository,
+  SystemConfigRepository,
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
@@ -21,6 +22,12 @@ import {
   NoopMetaRateLimiter,
 } from '@content-platform/publishers';
 import { loadWorkerConfig } from './config.js';
+import {
+  buildGetAccessToken,
+  buildMetaCredentialService,
+  fallbackRuntimeConfig,
+  loadRuntimeConfig,
+} from './credentials/index.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
 import { BullMqJobConsumer, BullMqJobQueue } from './queue/index.js';
 import {
@@ -32,6 +39,8 @@ import {
   type WebhookProcessJobData,
 } from './webhook/index.js';
 import {
+  InteractionResponseSchedulerService,
+  InteractionResponseSchedulerWorker,
   InteractionResponseService,
   MetaGraphBridge,
   WebhookRespondReconcileService,
@@ -53,14 +62,6 @@ import {
   type ContentPublishJobData,
   type PublicationReconcileJobData,
 } from './publication/index.js';
-
-const DEFAULT_INTERACTION_RESPONSE_CONFIG: InteractionResponseConfig = {
-  rules: [],
-  maxResponsesPerHour: 20,
-  minIntervalSeconds: 30,
-};
-
-const DEFAULT_TEMPLATES: TemplateMap = {};
 
 async function main(): Promise<void> {
   const config = loadWorkerConfig();
@@ -86,6 +87,54 @@ async function main(): Promise<void> {
   const responsesRepo = new InteractionResponsesRepository(db.db);
   const attemptsRepo = new InteractionResponseAttemptsRepository(db.db);
   const reconciliationsRepo = new InteractionResponseReconciliationsRepository(db.db);
+  const systemConfigRepo = new SystemConfigRepository(db.db);
+
+  // ---- runtime configuration from system_config ----
+
+  let interactionResponseConfig: InteractionResponseConfig;
+  let templates: TemplateMap;
+  try {
+    const runtimeConfig = await loadRuntimeConfig(systemConfigRepo);
+    interactionResponseConfig = runtimeConfig.interactionResponseConfig;
+    templates = runtimeConfig.templates;
+    if (runtimeConfig.defaultedKeys.length > 0) {
+      console.warn(
+        `[worker] system_config keys defaulted: ${runtimeConfig.defaultedKeys.join(', ')}`,
+      );
+    }
+    console.info(
+      `[worker] interaction response: ${interactionResponseConfig.rules.length} rules, ${Object.keys(templates).length} templates`,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[worker] failed to load system_config: ${msg}; using fail-closed defaults`);
+    const fallback = fallbackRuntimeConfig();
+    interactionResponseConfig = fallback.interactionResponseConfig;
+    templates = fallback.templates;
+  }
+
+  // ---- Meta credential bridge ----
+
+  const credentialBundle = buildMetaCredentialService(db.db, config);
+  if (!credentialBundle.available) {
+    console.warn(
+      `[worker] DB-backed Meta credentials unavailable: ${credentialBundle.unavailableReason}. Falling back to META_PAGE_ACCESS_TOKEN.`,
+    );
+  } else {
+    console.info('[worker] DB-backed Meta credentials available');
+  }
+
+  const getAccessToken = buildGetAccessToken({
+    bundle: credentialBundle,
+    fallbackToken: config.metaPageAccessToken,
+    logger: console,
+  });
+
+  if (!config.metaPageAccessToken && !credentialBundle.available) {
+    console.warn(
+      '[worker] neither META_PAGE_ACCESS_TOKEN nor DB credentials are configured — outbound Meta calls will fail with AUTHENTICATION_ERROR',
+    );
+  }
 
   // ---- outbox dispatcher ----
 
@@ -115,8 +164,8 @@ async function main(): Promise<void> {
     responsesRepo,
     extractorRegistry,
     interactionResponseService,
-    interactionResponseConfig: DEFAULT_INTERACTION_RESPONSE_CONFIG,
-    templates: DEFAULT_TEMPLATES,
+    interactionResponseConfig,
+    templates,
   });
 
   const webhookProcessWorker = new WebhookProcessWorker({
@@ -140,13 +189,6 @@ async function main(): Promise<void> {
   const metaGraphBridge = new MetaGraphBridge({
     apiVersion: config.metaGraphApiVersion,
   });
-
-  const getAccessToken = async (_destinationId: string): Promise<string> => {
-    if (!config.metaPageAccessToken) {
-      throw new Error('META_PAGE_ACCESS_TOKEN is not set');
-    }
-    return config.metaPageAccessToken;
-  };
 
   const metaAdapter = new MetaInteractionAdapter(
     {
@@ -200,6 +242,7 @@ async function main(): Promise<void> {
         },
       }),
     service: webhookRespondService,
+    credentialBundle,
   });
 
   const webhookRespondReconcileService = new WebhookRespondReconcileService({
@@ -253,6 +296,7 @@ async function main(): Promise<void> {
         },
       }),
     service: contentPublishService,
+    credentialBundle,
   });
 
   // ---- publication.reconcile wiring ----
@@ -292,11 +336,29 @@ async function main(): Promise<void> {
     outboxRepo,
     batchSize: config.publicationScheduleBatchSize,
     reconcileStaleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
+    ...(credentialBundle.service !== undefined && {
+      credentialService: credentialBundle.service,
+    }),
   });
 
   const publicationSchedulerWorker = new PublicationSchedulerWorker({
     scheduler: publicationSchedulerService,
     intervalMs: config.publicationScheduleIntervalMs,
+  });
+
+  // ---- interaction response scheduler wiring ----
+
+  const interactionResponseSchedulerService = new InteractionResponseSchedulerService({
+    txManager,
+    responsesRepo,
+    outboxRepo,
+    batchSize: config.interactionResponseScheduleBatchSize,
+    staleThresholdSeconds: config.interactionResponseStaleThresholdSeconds,
+  });
+
+  const interactionResponseSchedulerWorker = new InteractionResponseSchedulerWorker({
+    scheduler: interactionResponseSchedulerService,
+    intervalMs: config.interactionResponseScheduleIntervalMs,
   });
 
   // ---- shutdown ----
@@ -306,6 +368,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.info(`[worker] received ${signal}, shutting down`);
+    await interactionResponseSchedulerWorker.stop();
     await publicationSchedulerWorker.stop();
     await publicationReconcileWorker.close();
     await contentPublishWorker.close();
@@ -321,13 +384,8 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-  if (!config.metaPageAccessToken) {
-    console.warn(
-      '[worker] META_PAGE_ACCESS_TOKEN is not set — webhook.respond, content.publish, and publication.reconcile will fail with AUTHENTICATION_ERROR',
-    );
-  }
-
   console.info('[worker] started');
+  interactionResponseSchedulerWorker.start();
   publicationSchedulerWorker.start();
   await dispatcher.start();
 }

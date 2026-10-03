@@ -4,6 +4,11 @@
  * Values are read from the process environment. The worker does not read
  * `.env` files directly — the caller (systemd, Docker, or a local shell)
  * is responsible for loading them.
+ *
+ * Dynamic configuration that can change at runtime (interaction
+ * response rules, templates, rate-limit budgets) is loaded from the
+ * `system_config` table at startup by `RuntimeConfigLoader`. This file
+ * only covers the static process environment.
  */
 
 export interface WorkerConfig {
@@ -23,28 +28,44 @@ export interface WorkerConfig {
   outboxCleanupRetentionDays: number;
 
   // Publication scheduler
-  /** Polling interval for the publication scheduler, milliseconds. */
   publicationScheduleIntervalMs: number;
-  /** Maximum number of publications to claim per scan. */
   publicationScheduleBatchSize: number;
-  /**
-   * A RECONCILIATION publication is considered stale when its updated_at
-   * is older than this many seconds.
-   */
   publicationReconcileStaleThresholdSeconds: number;
 
-  // Interaction response
-  /** Meta Graph API version prefix, e.g. `v21.0`. */
+  // Interaction response scheduler (new in Sprint A)
+  interactionResponseScheduleIntervalMs: number;
+  interactionResponseScheduleBatchSize: number;
+  interactionResponseStaleThresholdSeconds: number;
+
+  // Meta Graph API
   metaGraphApiVersion: string;
+  /** Meta App ID for token rotation. */
+  metaAppId: string | undefined;
+  /** Meta App Secret for token rotation. */
+  metaAppSecret: string | undefined;
+
   /**
-   * Page Access Token used by the interaction response worker to reply
-   * to comments. When unset, the worker still starts, but the adapter
-   * will fail with AUTHENTICATION_ERROR for every response.
+   * Temporary fallback: Page Access Token sourced from the environment.
    *
-   * This is a temporary shortcut. It will be replaced by the
-   * MetaCredentialService lookup in a later slice.
+   * When a destination has no DB-backed PAGE_ACCESS_TOKEN, the
+   * credential bridge falls back to this value. Deprecated — will be
+   * removed once the DB credential lifecycle is seeded for every
+   * destination. Every fallback use is logged at warn level.
    */
   metaPageAccessToken: string | undefined;
+
+  /**
+   * Meta credential encryption key set. Required for the worker to
+   * decrypt DB-backed Page Access Tokens.
+   *
+   * Format: JSON object mapping key version -> base64 32-byte key.
+   */
+  metaCredentialEncryptionKeys: Record<string, string> | undefined;
+  /**
+   * Active key version for new Meta credential encryptions. Only used
+   * by admin tooling; the worker only decrypts.
+   */
+  metaCredentialEncryptionActiveVersion: number | undefined;
 }
 
 function requireEnv(name: string): string {
@@ -63,6 +84,27 @@ function optionalInt(name: string, defaultValue: number): number {
     throw new Error(`Environment variable ${name} must be an integer, got "${raw}"`);
   }
   return parsed;
+}
+
+function parseCredentialKeys(raw: string | undefined): Record<string, string> | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('must be a JSON object');
+    }
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v !== 'string') {
+        throw new Error(`value for key "${k}" must be a base64 string`);
+      }
+      result[k] = v;
+    }
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`META_CREDENTIAL_ENCRYPTION_KEYS is not valid JSON: ${msg}`);
+  }
 }
 
 export function loadWorkerConfig(): WorkerConfig {
@@ -85,7 +127,27 @@ export function loadWorkerConfig(): WorkerConfig {
       300,
     ),
 
+    interactionResponseScheduleIntervalMs: optionalInt(
+      'INTERACTION_RESPONSE_SCHEDULE_INTERVAL_MS',
+      30000,
+    ),
+    interactionResponseScheduleBatchSize: optionalInt(
+      'INTERACTION_RESPONSE_SCHEDULE_BATCH_SIZE',
+      50,
+    ),
+    interactionResponseStaleThresholdSeconds: optionalInt(
+      'INTERACTION_RESPONSE_STALE_THRESHOLD_SECONDS',
+      300,
+    ),
+
     metaGraphApiVersion: process.env.META_GRAPH_API_VERSION ?? 'v21.0',
+    metaAppId: process.env.META_APP_ID,
+    metaAppSecret: process.env.META_APP_SECRET,
     metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN,
+
+    metaCredentialEncryptionKeys: parseCredentialKeys(process.env.META_CREDENTIAL_ENCRYPTION_KEYS),
+    metaCredentialEncryptionActiveVersion: process.env.META_CREDENTIAL_ENCRYPTION_ACTIVE_VERSION
+      ? Number.parseInt(process.env.META_CREDENTIAL_ENCRYPTION_ACTIVE_VERSION, 10)
+      : undefined,
   };
 }

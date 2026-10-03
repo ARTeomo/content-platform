@@ -19,9 +19,24 @@ export interface WebhookRespondServiceDeps {
 export type RespondOutcome =
   | { kind: 'SKIPPED'; reason: string }
   | { kind: 'RESPONDED'; externalResponseId: string }
-  | { kind: 'RETRY'; errorCategory: string; errorMessage: string; retryAfterSeconds?: number }
-  | { kind: 'FAILED'; errorCategory: string; errorMessage: string }
-  | { kind: 'UNKNOWN'; errorCategory: string; errorMessage: string };
+  | {
+      kind: 'RETRY';
+      errorCategory: string;
+      errorMessage: string;
+      retryAfterSeconds?: number;
+    }
+  | {
+      kind: 'FAILED';
+      errorCategory: string;
+      errorMessage: string;
+      shouldInvalidateCredential: boolean;
+      destinationId: string;
+    }
+  | {
+      kind: 'UNKNOWN';
+      errorCategory: string;
+      errorMessage: string;
+    };
 
 /**
  * Response send path. Invoked by the webhook.respond worker once per
@@ -167,6 +182,8 @@ export class WebhookRespondService {
           kind: 'FAILED',
           errorCategory: result.errorCategory,
           errorMessage: result.errorMessage,
+          shouldInvalidateCredential: result.shouldInvalidateCredential ?? false,
+          destinationId: claimed.destinationId,
         };
       }
 

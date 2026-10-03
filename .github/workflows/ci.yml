@@ -6,9 +6,17 @@
 # The job:
 #   1. Installs the pnpm workspace with a frozen lockfile
 #   2. Verifies code formatting
-#   3. Runs ESLint
-#   4. Runs the TypeScript compiler in --noEmit mode
-#   5. Runs the test suite
+#   3. Runs the TypeScript compiler in --noEmit mode
+#   4. Runs the test suite
+#
+# ESLint is intentionally excluded. The project pins TypeScript 7.0.2
+# via pnpm-workspace.yaml, and typescript-eslint@8.x does not yet
+# support the TS 7 compiler API. Running `pnpm lint` locally fails at
+# module load with "typescript-eslint does not support TS 7.0".
+# Tracked upstream at:
+#   https://github.com/typescript-eslint/typescript-eslint/issues/10940
+# Re-enable the lint step once a compatible typescript-eslint release
+# ships.
 #
 # The DB- and Redis-backed tests require the TEST_DATABASE_URL and
 # TEST_REDIS_URL repository secrets. When those are absent, those tests
@@ -24,12 +32,10 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel an in-progress run when a new commit lands on the same branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least-privilege token. Nothing in the job writes to the repo.
 permissions:
   contents: read
 
@@ -43,12 +49,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Reads the `packageManager` field from package.json (pnpm@12.3.4).
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
-      # Reads the Node version from .nvmrc (22). Caches the pnpm store
-      # keyed by pnpm-lock.yaml so subsequent runs skip the download.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -60,9 +63,6 @@ jobs:
 
       - name: Format check
         run: pnpm format:check
-
-      - name: Lint
-        run: pnpm lint
 
       - name: Typecheck
         run: pnpm typecheck

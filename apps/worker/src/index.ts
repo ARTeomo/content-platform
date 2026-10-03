@@ -19,8 +19,9 @@ import {
   MetaPublicationReconciler,
   MetaPublisherAdapter,
   MetaResponseReconciler,
-  NoopMetaRateLimiter,
+  RedisMetaRateLimiter,
 } from '@content-platform/publishers';
+import Redis from 'ioredis';
 import { loadWorkerConfig } from './config.js';
 import {
   buildGetAccessToken,
@@ -29,7 +30,7 @@ import {
   loadRuntimeConfig,
 } from './credentials/index.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
-import { BullMqJobConsumer, BullMqJobQueue } from './queue/index.js';
+import { BullMqJobConsumer, BullMqJobQueue, redisOptionsFromUrl } from './queue/index.js';
 import {
   ChangeExtractorRegistry,
   FeedChangeExtractor,
@@ -74,6 +75,21 @@ async function main(): Promise<void> {
 
   const queue = new BullMqJobQueue({ redisUrl: config.redisUrl });
 
+  // Separate Redis connection for the rate limiter.
+  //
+  // The BullMQ connection is dedicated to BullMQ and uses
+  // `maxRetriesPerRequest: null` for blocking operations. The rate
+  // limiter's EVAL calls use a small, bounded retry policy so a Redis
+  // outage does not stall the worker indefinitely.
+  const rateLimiterRedis = new Redis({
+    ...redisOptionsFromUrl(config.redisUrl),
+    maxRetriesPerRequest: 3,
+    enableOfflineQueue: false,
+  });
+  rateLimiterRedis.on('error', (err) => {
+    console.error('[rate-limit] redis connection error:', err.message);
+  });
+
   // ---- shared repositories ----
 
   const outboxRepo = new OutboxRepository(db.db);
@@ -93,10 +109,12 @@ async function main(): Promise<void> {
 
   let interactionResponseConfig: InteractionResponseConfig;
   let templates: TemplateMap;
+  let rateLimitConfig;
   try {
     const runtimeConfig = await loadRuntimeConfig(systemConfigRepo);
     interactionResponseConfig = runtimeConfig.interactionResponseConfig;
     templates = runtimeConfig.templates;
+    rateLimitConfig = runtimeConfig.rateLimitConfig;
     if (runtimeConfig.defaultedKeys.length > 0) {
       console.warn(
         `[worker] system_config keys defaulted: ${runtimeConfig.defaultedKeys.join(', ')}`,
@@ -105,12 +123,16 @@ async function main(): Promise<void> {
     console.info(
       `[worker] interaction response: ${interactionResponseConfig.rules.length} rules, ${Object.keys(templates).length} templates`,
     );
+    console.info(
+      `[worker] rate limits: publish=${rateLimitConfig.publish.perHourPerDestination}/h/dest, engagement=${rateLimitConfig.engagement.perHourPerDestination}/h/dest`,
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[worker] failed to load system_config: ${msg}; using fail-closed defaults`);
     const fallback = fallbackRuntimeConfig();
     interactionResponseConfig = fallback.interactionResponseConfig;
     templates = fallback.templates;
+    rateLimitConfig = fallback.rateLimitConfig;
   }
 
   // ---- Meta credential bridge ----
@@ -135,6 +157,13 @@ async function main(): Promise<void> {
       '[worker] neither META_PAGE_ACCESS_TOKEN nor DB credentials are configured — outbound Meta calls will fail with AUTHENTICATION_ERROR',
     );
   }
+
+  // ---- rate limiter ----
+
+  const rateLimiter = new RedisMetaRateLimiter({
+    redis: rateLimiterRedis,
+    config: rateLimitConfig,
+  });
 
   // ---- outbox dispatcher ----
 
@@ -193,7 +222,7 @@ async function main(): Promise<void> {
   const metaAdapter = new MetaInteractionAdapter(
     {
       graphClient: metaGraphBridge,
-      rateLimiter: new NoopMetaRateLimiter(),
+      rateLimiter,
       getAccessToken,
     },
     { apiVersion: config.metaGraphApiVersion },
@@ -202,7 +231,7 @@ async function main(): Promise<void> {
   const metaPublisherAdapter = new MetaPublisherAdapter(
     {
       graphClient: metaGraphBridge,
-      rateLimiter: new NoopMetaRateLimiter(),
+      rateLimiter,
       getAccessToken,
     },
     { apiVersion: config.metaGraphApiVersion },
@@ -377,6 +406,7 @@ async function main(): Promise<void> {
     await webhookProcessWorker.close();
     await dispatcher.stop();
     await queue.close();
+    await rateLimiterRedis.quit();
     await db.close();
     process.exit(0);
   };

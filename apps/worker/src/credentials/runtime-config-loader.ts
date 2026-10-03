@@ -1,24 +1,24 @@
 import type { SystemConfigRepository } from '@content-platform/database';
+import {
+  DEFAULT_RATE_LIMIT_CONFIG,
+  type RateLimitBudget,
+  type RateLimitConfig,
+} from '@content-platform/publishers';
 import type { InteractionResponseConfig, TemplateMap } from '../interaction-response/types.js';
 
-/**
- * Configuration keys read from `system_config` at worker startup.
- *
- * These keys are the runtime source of truth for policy rules,
- * templates, and rate-limit budgets. The values in this file are
- * defaults used only when the key is absent.
- */
 export const SYSTEM_CONFIG_KEYS = {
   interactionResponseRules: 'interaction_response_rules',
   interactionResponseTemplates: 'interaction_response_templates',
   interactionResponseMaxPerHour: 'interaction_response.max_per_hour_per_destination',
   interactionResponseMinIntervalSeconds: 'interaction_response.min_interval_seconds',
   interactionResponseGlobalMaxPerHour: 'interaction_response.global_max_per_hour',
+  rateLimitBudgets: 'meta.rate_limit.budgets',
 } as const;
 
 export interface LoadedRuntimeConfig {
   interactionResponseConfig: InteractionResponseConfig;
   templates: TemplateMap;
+  rateLimitConfig: RateLimitConfig;
   /** Which keys were actually present in `system_config`. */
   loadedKeys: string[];
   /** Which keys were absent and fell back to defaults. */
@@ -38,8 +38,8 @@ const DEFAULT_TEMPLATES: TemplateMap = {};
  *
  * Every missing key falls back to a hard-coded default. The
  * `defaultedKeys` array lets the worker log exactly which keys still
- * need to be seeded, so operators are not left guessing why the
- * policy engine is running in fail-closed mode.
+ * need to be seeded, so operators are not left guessing why a
+ * subsystem is running in fail-closed mode.
  */
 export async function loadRuntimeConfig(
   repo: SystemConfigRepository,
@@ -53,7 +53,9 @@ export async function loadRuntimeConfig(
   const rawMinInterval = await repo.get<number>(
     SYSTEM_CONFIG_KEYS.interactionResponseMinIntervalSeconds,
   );
+  const rawRateLimits = await repo.get<unknown>(SYSTEM_CONFIG_KEYS.rateLimitBudgets);
 
+  // ----- interaction response rules -----
   let rules: InteractionResponseConfig['rules'] = [];
   if (Array.isArray(rawRules)) {
     rules = rawRules as InteractionResponseConfig['rules'];
@@ -62,6 +64,7 @@ export async function loadRuntimeConfig(
     defaultedKeys.push(SYSTEM_CONFIG_KEYS.interactionResponseRules);
   }
 
+  // ----- templates -----
   let templates: TemplateMap = {};
   if (rawTemplates && typeof rawTemplates === 'object' && !Array.isArray(rawTemplates)) {
     templates = rawTemplates as TemplateMap;
@@ -70,6 +73,7 @@ export async function loadRuntimeConfig(
     defaultedKeys.push(SYSTEM_CONFIG_KEYS.interactionResponseTemplates);
   }
 
+  // ----- max per hour -----
   let maxResponsesPerHour: number;
   if (typeof rawMax === 'number' && Number.isFinite(rawMax) && rawMax > 0) {
     maxResponsesPerHour = rawMax;
@@ -79,6 +83,7 @@ export async function loadRuntimeConfig(
     defaultedKeys.push(SYSTEM_CONFIG_KEYS.interactionResponseMaxPerHour);
   }
 
+  // ----- min interval -----
   let minIntervalSeconds: number;
   if (
     typeof rawMinInterval === 'number' &&
@@ -92,6 +97,16 @@ export async function loadRuntimeConfig(
     defaultedKeys.push(SYSTEM_CONFIG_KEYS.interactionResponseMinIntervalSeconds);
   }
 
+  // ----- rate limit budgets -----
+  let rateLimitConfig: RateLimitConfig;
+  if (rawRateLimits && typeof rawRateLimits === 'object' && !Array.isArray(rawRateLimits)) {
+    rateLimitConfig = parseRateLimitConfig(rawRateLimits as Record<string, unknown>);
+    loadedKeys.push(SYSTEM_CONFIG_KEYS.rateLimitBudgets);
+  } else {
+    rateLimitConfig = DEFAULT_RATE_LIMIT_CONFIG;
+    defaultedKeys.push(SYSTEM_CONFIG_KEYS.rateLimitBudgets);
+  }
+
   return {
     interactionResponseConfig: {
       rules,
@@ -99,6 +114,7 @@ export async function loadRuntimeConfig(
       minIntervalSeconds,
     },
     templates,
+    rateLimitConfig,
     loadedKeys,
     defaultedKeys,
   };
@@ -112,7 +128,30 @@ export function fallbackRuntimeConfig(): LoadedRuntimeConfig {
   return {
     interactionResponseConfig: DEFAULT_INTERACTION_RESPONSE_CONFIG,
     templates: DEFAULT_TEMPLATES,
+    rateLimitConfig: DEFAULT_RATE_LIMIT_CONFIG,
     loadedKeys: [],
     defaultedKeys: Object.values(SYSTEM_CONFIG_KEYS),
   };
+}
+
+function parseRateLimitConfig(raw: Record<string, unknown>): RateLimitConfig {
+  return {
+    publish: parseBudget(raw['publish'], DEFAULT_RATE_LIMIT_CONFIG.publish),
+    engagement: parseBudget(raw['engagement'], DEFAULT_RATE_LIMIT_CONFIG.engagement),
+  };
+}
+
+function parseBudget(value: unknown, fallback: RateLimitBudget): RateLimitBudget {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback;
+  const v = value as Record<string, unknown>;
+  return {
+    perHourPerDestination: positiveInt(v['perHourPerDestination'], fallback.perHourPerDestination),
+    globalPerHour: positiveInt(v['globalPerHour'], fallback.globalPerHour),
+    globalPerDay: positiveInt(v['globalPerDay'], fallback.globalPerDay),
+  };
+}
+
+function positiveInt(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
 }

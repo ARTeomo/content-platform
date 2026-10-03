@@ -26,6 +26,18 @@ export type {
 
 export { NoopMetaRateLimiter } from './meta-rate-limiter.js';
 
+export {
+  RedisMetaRateLimiter,
+  type RedisMetaRateLimiterOptions,
+  type RateLimiterRedisLike,
+} from './redis-meta-rate-limiter.js';
+
+export {
+  DEFAULT_RATE_LIMIT_CONFIG,
+  type RateLimitBudget,
+  type RateLimitConfig,
+} from './meta-rate-limiter-config.js';
+
 export type {
   GraphClient,
   GraphGetClient,

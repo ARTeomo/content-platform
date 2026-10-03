@@ -15,6 +15,7 @@
     { "idx": 10, "version": "7", "when": 1789492852527, "tag": "0010_flashy_patriot", "breakpoints": true },
     { "idx": 11, "version": "7", "when": 1789493457759, "tag": "0011_natural_orphan", "breakpoints": true },
     { "idx": 12, "version": "7", "when": 1789493749819, "tag": "0012_groovy_mephisto", "breakpoints": true },
-    { "idx": 13, "version": "7", "when": 1789494000000, "tag": "0013_seed_system_config", "breakpoints": true }
+    { "idx": 13, "version": "7", "when": 1789494000000, "tag": "0013_seed_system_config", "breakpoints": true },
+    { "idx": 14, "version": "7", "when": 1789495000000, "tag": "0014_seed_rate_limit_budgets", "breakpoints": true }
   ]
 }

@@ -984,6 +984,34 @@ HTTPS endpoint or a static ngrok domain.
 
 ---
 
+### 7. ESLint blocked by TypeScript 7 pin
+
+`pnpm lint` fails at module load because the project pins
+TypeScript `7.0.2` (in `pnpm-workspace.yaml`) and
+`typescript-eslint@8.70.0` does not yet support the TS 7 compiler
+API. The failure is:
+
+```
+typescript-eslint does not support TS 7.0.
+Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0
+```
+
+Tracked upstream at
+[typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940).
+
+The CI workflow (`.github/workflows/ci.yml`) intentionally does
+not run the lint step for this reason. The other checks —
+`pnpm format:check`, `pnpm typecheck`, `pnpm test` — remain in CI
+and protect the `main` branch.
+
+Resolution options when revisiting:
+
+- Downgrade TypeScript to 6.x. The language is identical; TS 7 is
+  a compiler rewrite. All tooling (typescript-eslint, tsx,
+  drizzle-kit, tsc) is compatible with both.
+- Wait for a typescript-eslint release that supports TS 7, then
+  re-enable the lint step in CI.
+
 ## Next steps
 
 The baseline Phase 19 (Meta publisher adapter and reconciliation) is

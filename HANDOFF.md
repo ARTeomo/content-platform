@@ -4,8 +4,82 @@ This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
 **Snapshot date:** 2026-10-03
-**Last commit:** `3373895` (fix(worker): atomic claim for webhook and response creation)
+**Last commit:** `97db14d` (feat(worker): add system rebuild and outbox cleanup queues)
 **Repository:** https://github.com/ARTeomo/content-platform
+
+---
+
+## Milestone: Phase 20 Sprint C — observability and system queues
+
+Sprint C closes the remaining three operational findings from the
+baseline audit. The scope is deliberately narrow: no new domain
+behavior, only the operational and observability primitives that were
+specified in the Technical Specification but never wired into the
+worker.
+
+### Findings addressed
+
+| #   | Finding                                                          |
+| --- | ---------------------------------------------------------------- |
+| F7  | `system.rebuild` and `system.outbox.cleanup` queues              |
+| F11 | `notifications` table is never written                           |
+| F12 | `system_logs` and `audit_logs` are never written                 |
+
+### F7 — system queues
+
+Two new queues and their workers.
+
+**`system.rebuild`.** A safety net for the case where BullMQ state is
+lost (Redis wipe, queue corruption) while durable PostgreSQL state
+still reflects work that should be in flight. It scans three
+entities — stale RECEIVED `webhook_events`, due SCHEDULED
+`publications`, due SCHEDULED `interaction_responses` — and re-enqueues
+the corresponding jobs with a `:rebuild:<epoch_ms>` suffix. The
+suffix guarantees the rebuild never collides with the primary
+scheduler's job_ids, and the outbox `enqueue` is idempotent on
+`job_id`. The service deliberately does **not** reset entity statuses:
+downstream workers already have atomic claim guards, so a duplicate
+rebuild cannot produce duplicate external side effects.
+
+**`system.outbox.cleanup`.** The cleanup of old DISPATCHED outbox rows
+is no longer a timer inside the dispatcher. It is a dedicated queue
+and worker, and a scheduler enqueues one job per hour (configurable
+via `SYSTEM_OUTBOX_CLEANUP_INTERVAL_MS`). This removes the race that
+would otherwise occur when multiple dispatcher instances run
+concurrently and each tries to DELETE the same rows.
+
+Both queues are triggered by command-line scripts:
+
+- `packages/database/scripts/trigger-system-rebuild.mjs`
+- `packages/database/scripts/trigger-outbox-cleanup.mjs`
+
+### F11 — notifications
+
+A `NotificationService` writes to the `notifications` table from the
+worker. Alerts are best-effort: a DB write failure is logged but never
+propagates, so an alert can never mask a business outcome.
+
+Currently wired:
+
+- `credential_failure` — a PAGE_ACCESS_TOKEN is invalidated via
+  `shouldInvalidateCredential`.
+- `publication_failure` — a publication reaches the FAILED state.
+
+`AlertingService` combines each notification with a matching
+`system_logs` entry so operators have both a short-term alert and a
+durable forensic record.
+
+### F12 — system logs and audit logs
+
+A `SystemLogService` writes to `system_logs`. Only high-value events
+belong here: durable business state transitions such as
+`publication.published`, `publication.failed`, `credential.invalidated`.
+Routine worker tracing remains on stdout.
+
+The `audit_logs` table is intentionally left without a writer in
+Sprint C. It is reserved for actor-initiated changes from the admin
+UI, which does not yet exist. The technical specification records
+this as a deferred decision; Sprint C does not change it.
 
 ---
 
@@ -19,13 +93,13 @@ addressing one logical cluster of findings.
 
 ### Commits
 
-| Commit    | Findings addressed                                |
-| --------- | ------------------------------------------------- |
-| `90e210c` | F2, F5, F6, F8, F9 — worker runtime wiring        |
-| `16675be` | F1 — webhook ingress single-transaction boundary  |
-| `b32c2cd` | F10, F13, F16 — webhook token encryption           |
-| `4849440` | F3, F4 — Redis-backed Meta rate limiters          |
-| `3373895` | F14, F15 — atomic claims for event and response   |
+| Commit    | Findings addressed                               |
+| --------- | ------------------------------------------------ |
+| `90e210c` | F2, F5, F6, F8, F9 — worker runtime wiring       |
+| `16675be` | F1 — webhook ingress single-transaction boundary |
+| `b32c2cd` | F10, F13, F16 — webhook token encryption         |
+| `4849440` | F3, F4 — Redis-backed Meta rate limiters         |
+| `3373895` | F14, F15 — atomic claims for event and response  |
 
 ### F1 — webhook ingress transaction boundary
 
@@ -111,11 +185,10 @@ occur under concurrency.
 
 ### Findings still open
 
-| #    | Finding                                         | Planned  |
-| ---- | ----------------------------------------------- | -------- |
-| F7   | `system.rebuild` and `system.outbox.cleanup`    | Sprint C |
-| F11  | `notifications` table never written             | Sprint C |
-| F12  | `system_logs`, `audit_logs`, `ai_usage` unused  | Sprint C |
+None. Sprint C closed F7, F11, and F12. The `audit_logs` table
+remains without a writer by design; it is reserved for
+actor-initiated changes from the admin UI, which does not yet
+exist.
 
 ---
 
@@ -550,15 +623,15 @@ not committed to the repository.
 
 Six workspace packages:
 
-| Package                         | Purpose                                                                                                                   | Tests   |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                              | 22      |
-| `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                      | 37      |
-| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                    | 21      |
-| `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter     | 56      |
-| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, all queue consumers                              | 76      |
-| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                           | 8       |
-| **Total**                       |                                                                                                                           | **220** |
+| Package                         | Purpose                                                                                                               | Tests   |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
+| `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                          | 22      |
+| `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                  | 37      |
+| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 21      |
+| `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter | 56      |
+| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services                          | 84      |
+| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 8       |
+| **Total**                       |                                                                                                                       | **228** |
 
 The 220-test verification is recorded with `TEST_DATABASE_URL` and
 `TEST_REDIS_URL` available. Without those, the DB- and Redis-backed

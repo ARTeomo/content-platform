@@ -1,26 +1,34 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDatabaseClient, type DatabaseClient } from '@content-platform/database';
+import { WebhookTokenEncryptionProvider } from '@content-platform/authentication';
 import { buildApp } from '../../app.js';
 import type { ApiConfig } from '../../config.js';
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL;
 const APP_SECRET = 'test-app-secret';
-const VERIFY_KEY = randomBytes(32).toString('base64');
+const VERIFY_KEY_BYTES = randomBytes(32);
 
 describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
   let client: DatabaseClient;
   let app: Awaited<ReturnType<typeof buildApp>>;
   let destinationId: string;
+  let encryption: WebhookTokenEncryptionProvider;
 
   beforeAll(async () => {
     client = createDatabaseClient({ url: TEST_DB_URL! });
+    const keySet = {
+      keys: new Map([[1, VERIFY_KEY_BYTES]]),
+      activeVersion: 1,
+    };
+    encryption = new WebhookTokenEncryptionProvider(keySet);
+
     const config: ApiConfig = {
       host: '127.0.0.1',
       port: 0,
       databaseUrl: TEST_DB_URL!,
       metaAppSecret: APP_SECRET,
-      webhookTokenEncryptionKey: VERIFY_KEY,
+      webhookTokenKeySet: keySet,
     };
     app = await buildApp({ config, client });
 
@@ -45,12 +53,16 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
   });
 
   beforeEach(async () => {
-    await client.sql`TRUNCATE outbox_jobs, webhook_events RESTART IDENTITY CASCADE`;
+    await client.sql`TRUNCATE outbox_jobs, webhook_events, webhook_subscriptions RESTART IDENTITY CASCADE`;
   });
 
   function sign(body: string): string {
     return 'sha256=' + createHmac('sha256', APP_SECRET).update(body).digest('hex');
   }
+
+  // ---------------------------------------------------------------------
+  // POST — event ingress
+  // ---------------------------------------------------------------------
 
   it('rejects invalid signature with 401', async () => {
     const res = await app.inject({
@@ -106,5 +118,77 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
     expect(events[0]!.c).toBe(1);
     const jobs = await client.sql<{ c: number }[]>`SELECT COUNT(*)::int AS c FROM outbox_jobs`;
     expect(jobs[0]!.c).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------
+  // GET — hub.challenge handshake
+  // ---------------------------------------------------------------------
+
+  async function insertSubscription(plaintextToken: string, keyVersion = 1): Promise<void> {
+    const encrypted = encryption.encrypt(plaintextToken, destinationId);
+    await client.sql`
+      INSERT INTO webhook_subscriptions (
+        destination_id, provider, fields, verify_token_encrypted,
+        verify_token_key_version, status
+      ) VALUES (
+        ${destinationId}, 'META', ARRAY['feed', 'mention'],
+        ${encrypted.ciphertext}, ${encrypted.keyVersion === keyVersion ? keyVersion : encrypted.keyVersion},
+        'ACTIVE'
+      )
+    `;
+  }
+
+  it('handshake: accepts the correct verify token and returns hub.challenge', async () => {
+    await insertSubscription('expected-token-123');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=expected-token-123&hub.challenge=challenge-abc',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('challenge-abc');
+
+    const [row] = await client.sql<{ last_verified_at: Date | null }[]>`
+      SELECT last_verified_at FROM webhook_subscriptions LIMIT 1
+    `;
+    expect(row!.last_verified_at).not.toBeNull();
+  });
+
+  it('handshake: rejects a mismatched verify token with 403', async () => {
+    await insertSubscription('expected-token-123');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=wrong-token&hub.challenge=challenge-abc',
+    });
+
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('handshake: rejects malformed mode with 400', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/webhooks/meta?hub.mode=unsubscribe&hub.verify_token=x&hub.challenge=c',
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('handshake: rejects a ciphertext with an unknown key version', async () => {
+    await client.sql`
+      INSERT INTO webhook_subscriptions (
+        destination_id, provider, fields, verify_token_encrypted,
+        verify_token_key_version, status
+      ) VALUES (
+        ${destinationId}, 'META', ARRAY['feed'], 'v1:boguspayload', 99, 'ACTIVE'
+      )
+    `;
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=anything&hub.challenge=c',
+    });
+
+    expect(res.statusCode).toBe(403);
   });
 });

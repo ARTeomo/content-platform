@@ -141,6 +141,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@content-platform/authentication':
+        specifier: workspace:*
+        version: link:../../packages/authentication
       '@content-platform/database':
         specifier: workspace:*
         version: link:../../packages/database

@@ -14,6 +14,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@content-platform/authentication": "workspace:*",
     "@content-platform/database": "workspace:*",
     "fastify": "5.2.0",
     "zod": "3.24.1"

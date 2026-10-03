@@ -8,6 +8,10 @@ export default defineConfig({
         import.meta.dirname,
         '../../packages/database/src/index.ts',
       ),
+      '@content-platform/authentication': resolve(
+        import.meta.dirname,
+        '../../packages/authentication/src/index.ts',
+      ),
     },
   },
   test: {

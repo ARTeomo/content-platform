@@ -1,4 +1,4 @@
-import { createDecipheriv, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import {
   OutboxRepository,
@@ -7,6 +7,7 @@ import {
   sql,
   type DatabaseClient,
 } from '@content-platform/database';
+import { WebhookTokenEncryptionProvider } from '@content-platform/authentication';
 import { verifyMetaSignature } from './signature.js';
 import { MetaWebhookEnvelopeSchema } from './envelope.js';
 import type { ApiConfig } from '../../config.js';
@@ -26,27 +27,7 @@ interface SubscriptionRow {
   id: string;
   destination_id: string;
   verify_token_encrypted: string;
-}
-
-function decryptVerifyToken(ciphertext: string, keyBase64: string, aad: string): string {
-  const [version, payloadB64] = ciphertext.split(':', 2);
-  if (version !== 'v1' || !payloadB64) {
-    throw new Error('Unsupported verify token ciphertext format');
-  }
-  const payload = Buffer.from(payloadB64, 'base64');
-  const iv = payload.subarray(0, 12);
-  const tag = payload.subarray(payload.length - 16);
-  const encrypted = payload.subarray(12, payload.length - 16);
-
-  const key = Buffer.from(keyBase64, 'base64');
-  if (key.length !== 32) {
-    throw new Error('WEBHOOK_TOKEN_ENCRYPTION_KEY must be 32 bytes base64');
-  }
-
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAAD(Buffer.from(aad, 'utf8'));
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+  verify_token_key_version: number;
 }
 
 export async function metaWebhookRoutes(
@@ -57,7 +38,20 @@ export async function metaWebhookRoutes(
   const eventsRepo = new WebhookEventsRepository(client.db);
   const outboxRepo = new OutboxRepository(client.db);
   const txManager = new TransactionManager(client.db);
+  const webhookTokenEncryption = new WebhookTokenEncryptionProvider(config.webhookTokenKeySet);
 
+  // -------------------------------------------------------------------------
+  // POST — webhook event ingress
+  //
+  // Single database transaction per HTTP request:
+  //   1. Resolve the destination from the Meta Page ID.
+  //   2. Insert webhook_events idempotently.
+  //   3. Enqueue outbox job if the event was newly inserted.
+  //
+  // Signature verification, JSON parsing, and Zod validation all run
+  // before the transaction and touch no database state. No Redis call
+  // occurs on the hot path.
+  // -------------------------------------------------------------------------
   app.post('/api/v1/webhooks/meta', async (request: FastifyRequest, reply: FastifyReply) => {
     const rawBody = request.rawBody;
     if (!rawBody) {
@@ -88,13 +82,6 @@ export async function metaWebhookRoutes(
     const externalObjectId = envelope.entry[0]?.id ?? 'unknown';
     const field = envelope.entry[0]?.changes[0]?.field;
 
-    // Single database transaction per HTTP request:
-    //   1. Resolve the destination from the Meta Page ID.
-    //   2. Insert webhook_events idempotently.
-    //   3. Enqueue outbox job if the event was newly inserted.
-    //
-    // Fail-closed: any failure rolls back all three steps and the
-    // caller receives 500. No Redis call on the hot path.
     try {
       await txManager.run(async (tx) => {
         const destinationRows = (await tx.execute(sql`
@@ -131,6 +118,17 @@ export async function metaWebhookRoutes(
     return reply.code(200).send({ status: 'ok' });
   });
 
+  // -------------------------------------------------------------------------
+  // GET — Meta hub.challenge handshake
+  //
+  // Meta sends this when the webhook subscription is created or
+  // re-verified. Each active subscription is checked; the first one
+  // whose verify token matches the incoming query parameter wins.
+  //
+  // The verify token is decrypted using the key version stored on the
+  // subscription row, which enables key rotation without a coordinated
+  // downtime.
+  // -------------------------------------------------------------------------
   app.get('/api/v1/webhooks/meta', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as HandshakeQuery;
     const mode = query['hub.mode'];
@@ -142,19 +140,22 @@ export async function metaWebhookRoutes(
     }
 
     const allActive = await client.sql<SubscriptionRow[]>`
-      SELECT id, destination_id, verify_token_encrypted
+      SELECT id, destination_id, verify_token_encrypted, verify_token_key_version
       FROM webhook_subscriptions
       WHERE provider = 'META' AND status = 'ACTIVE'
     `;
 
     for (const sub of allActive) {
       try {
-        const decrypted = decryptVerifyToken(
-          sub.verify_token_encrypted,
-          config.webhookTokenEncryptionKey,
-          `META:${sub.destination_id}`,
+        const decrypted = webhookTokenEncryption.decrypt(
+          {
+            ciphertext: sub.verify_token_encrypted,
+            keyVersion: sub.verify_token_key_version,
+          },
+          sub.destination_id,
         );
-        if (decrypted === verifyToken) {
+
+        if (webhookTokenEncryption.safeEqual(decrypted, verifyToken)) {
           await client.sql`
             UPDATE webhook_subscriptions
             SET last_verified_at = now(), updated_at = now()

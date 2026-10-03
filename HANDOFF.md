@@ -19,11 +19,11 @@ worker.
 
 ### Findings addressed
 
-| #   | Finding                                                          |
-| --- | ---------------------------------------------------------------- |
-| F7  | `system.rebuild` and `system.outbox.cleanup` queues              |
-| F11 | `notifications` table is never written                           |
-| F12 | `system_logs` and `audit_logs` are never written                 |
+| #   | Finding                                             |
+| --- | --------------------------------------------------- |
+| F7  | `system.rebuild` and `system.outbox.cleanup` queues |
+| F11 | `notifications` table is never written              |
+| F12 | `system_logs` and `audit_logs` are never written    |
 
 ### F7 — system queues
 
@@ -629,9 +629,9 @@ Six workspace packages:
 | `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                  | 37      |
 | `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 21      |
 | `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter | 56      |
-| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services                          | 84      |
+| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 91      |
 | `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 8       |
-| **Total**                       |                                                                                                                       | **228** |
+| **Total**                       |                                                                                                                       | **235** |
 
 The 220-test verification is recorded with `TEST_DATABASE_URL` and
 `TEST_REDIS_URL` available. Without those, the DB- and Redis-backed

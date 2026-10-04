@@ -4,6 +4,7 @@
  * Inbound Meta webhook subscriptions, event receipts, delivery attempts,
  * and materialized external interactions.
  */
+export * from './webhook-endpoints.js';
 export * from './webhook-subscriptions.js';
 export * from './webhook-subscription-health.js';
 export * from './webhook-events.js';

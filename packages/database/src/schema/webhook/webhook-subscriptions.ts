@@ -11,6 +11,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createdAtColumn, idColumn, nullableTimestampColumn, updatedAtColumn } from '../_common.js';
 import { destinations } from '../publication/destinations.js';
+import { webhookEndpoints } from './webhook-endpoints.js';
 
 /**
  * Technical subscription configuration for an inbound webhook.
@@ -34,6 +35,13 @@ export const webhookSubscriptions = pgTable(
     destinationId: uuid('destination_id')
       .notNull()
       .references(() => destinations.id, { onDelete: 'cascade' }),
+    /**
+     * The owning webhook endpoint. Nullable during the v1.3 EXPAND phase;
+     * made NOT NULL by migration 0017 after the backfill script has run.
+     */
+    endpointId: uuid('endpoint_id').references(() => webhookEndpoints.id, {
+      onDelete: 'restrict',
+    }),
     provider: varchar('provider', { length: 32 }).notNull(),
     fields: text('fields').array().notNull(),
     verifyTokenEncrypted: text('verify_token_encrypted').notNull(),
@@ -50,6 +58,7 @@ export const webhookSubscriptions = pgTable(
       table.provider,
     ),
     index('webhook_subscriptions_status_idx').on(table.status),
+    index('webhook_subscriptions_endpoint_id_idx').on(table.endpointId),
     check(
       'webhook_subscriptions_status_check',
       sql`${table.status} IN ('ACTIVE', 'PAUSED', 'DISABLED')`,

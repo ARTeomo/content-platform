@@ -7,7 +7,7 @@
 > the follow-up remediation work.
 >
 > The remediation is documented in
-> [`sprint-audit-03-10-2026.md`](./sprint-audit-03-10-2026.md), which
+> [`sprint-audit-2026-10-03.md`](./sprint-audit-2026-10-03.md), which
 > records the commits that closed each finding.
 >
 > Summary of closure (as of 2026-10-04):

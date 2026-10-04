@@ -1,6 +1,6 @@
 # Sprint audit — 2026-10-03
 
-**Baseline audit:** [`baseline-audit-20-09-2026.md`](./baseline-audit-20-09-2026.md)
+**Baseline audit:** [`baseline-audit-2026-09-20.md`](./baseline-audit-2026-09-20.md)
 
 **Commit range:** `de5a71a..945b082` (12 commits)
 

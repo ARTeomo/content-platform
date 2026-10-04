@@ -423,7 +423,7 @@ Six workspace packages:
 A baseline audit was performed against the original three baseline
 documents. It identified seven findings that are not yet closed in the
 runtime. These are tracked in
-[`docs/audit/baseline-audit-20-09-2026.md`](./docs/audit/baseline-audit-20-09-2026.md).
+[`docs/audit/baseline-audit-2026-09-20.md`](./docs/audit/baseline-audit-2026-09-20.md).
 
 | Finding | Summary                                                         | Spec reference         |
 | ------- | --------------------------------------------------------------- | ---------------------- |

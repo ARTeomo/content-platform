@@ -10,6 +10,11 @@ export {
   type WebhookSubscriptionInput,
 } from './webhook-subscriptions-repository.js';
 
+export {
+  WebhookEndpointsRepository,
+  type WebhookEndpointInput,
+} from './webhook-endpoints-repository.js';
+
 export { WebhookSubscriptionHealthRepository } from './webhook-subscription-health-repository.js';
 
 export {

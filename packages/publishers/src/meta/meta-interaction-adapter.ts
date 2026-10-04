@@ -1,3 +1,4 @@
+import { CredentialResolutionError } from './meta-credential-error.js';
 import type {
   GraphClient,
   MetaErrorCategory,
@@ -61,11 +62,16 @@ export class MetaInteractionAdapter {
       accessToken = await this.deps.getAccessToken(input.destinationId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Only mark the credential INVALID when the DB row actually
+      // exists and is marked INVALID. A missing credential or an
+      // unavailable credential service has nothing to invalidate.
+      const shouldInvalidateCredential =
+        !(err instanceof CredentialResolutionError) || err.category === 'CREDENTIAL_INVALID';
       return {
         status: 'FAILED',
         errorCategory: 'AUTHENTICATION_ERROR',
         errorMessage: `credential lookup failed: ${msg}`,
-        shouldInvalidateCredential: true,
+        ...(shouldInvalidateCredential && { shouldInvalidateCredential: true }),
         requestPayloadHash: input.requestPayloadHash,
       };
     }

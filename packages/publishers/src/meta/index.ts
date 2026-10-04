@@ -24,6 +24,11 @@ export type {
   ReconcilePublicationResult,
 } from './meta-publication-reconciler.js';
 
+export {
+  CredentialResolutionError,
+  type CredentialResolutionErrorCategory,
+} from './meta-credential-error.js';
+
 export { NoopMetaRateLimiter } from './meta-rate-limiter.js';
 
 export {

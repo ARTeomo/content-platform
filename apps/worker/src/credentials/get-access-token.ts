@@ -1,64 +1,67 @@
+import { CredentialResolutionError } from '@content-platform/publishers';
 import type { MetaCredentialServiceBundle } from './meta-credential-bridge.js';
 
 export type GetAccessTokenFn = (destinationId: string) => Promise<string>;
 
 export interface BuildGetAccessTokenOptions {
   bundle: MetaCredentialServiceBundle;
-  fallbackToken: string | undefined;
   logger: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
 /**
  * Build the `getAccessToken` callback used by every Meta adapter.
  *
- * Resolution order:
+ * Resolution path (fail-closed):
  *
- *   1. DB-backed PAGE_ACCESS_TOKEN for the destination, if present
+ *   1. The DB-backed PAGE_ACCESS_TOKEN for the destination, if present
  *      and not marked INVALID.
- *   2. Fallback `META_PAGE_ACCESS_TOKEN` environment variable.
- *      Every fallback use is logged at warn level so operators can
- *      see which destinations still need to be migrated.
+ *   2. Otherwise, throw a `CredentialResolutionError`.
  *
- * Throws when neither source yields a token. The adapters map the
- * throw to an AUTHENTICATION_ERROR result.
+ * There is no environment-variable fallback. The
+ * `META_PAGE_ACCESS_TOKEN` bypass was removed in v1.3 F5a: the token
+ * must live in `provider_credentials`, encrypted at rest, and be
+ * produced by `refresh-page-token.mjs`.
+ *
+ * The thrown error carries a category so that the adapters can
+ * distinguish "no credential exists" from "the credential is marked
+ * INVALID" and set `shouldInvalidateCredential` accordingly.
  */
 export function buildGetAccessToken(options: BuildGetAccessTokenOptions): GetAccessTokenFn {
-  const { bundle, fallbackToken, logger } = options;
-  let fallbackWarned = false;
+  const { bundle, logger } = options;
 
   return async (destinationId: string): Promise<string> => {
-    if (bundle.available && bundle.service) {
-      const cred = await bundle.service.getCredential({
-        provider: 'META',
-        credentialType: 'PAGE_ACCESS_TOKEN',
-        destinationId,
-      });
-
-      if (cred && cred.status !== 'INVALID') {
-        return cred.value;
-      }
-
-      if (cred && cred.status === 'INVALID') {
-        logger.warn(
-          `[credentials] destination ${destinationId} has INVALID PAGE_ACCESS_TOKEN in DB; refusing to use fallback`,
-        );
-        throw new Error(`PAGE_ACCESS_TOKEN for destination ${destinationId} is marked INVALID`);
-      }
+    if (!bundle.available || !bundle.service) {
+      const reason = bundle.unavailableReason ?? 'credential service unavailable';
+      logger.error(`[credentials] cannot resolve token for ${destinationId}: ${reason}`);
+      throw new CredentialResolutionError(
+        'CREDENTIAL_SERVICE_UNAVAILABLE',
+        `Credential service unavailable for destination ${destinationId}: ${reason}`,
+      );
     }
 
-    if (fallbackToken) {
-      if (!fallbackWarned) {
-        logger.warn(
-          '[credentials] no DB-backed PAGE_ACCESS_TOKEN available; falling back to META_PAGE_ACCESS_TOKEN environment variable. This bypass is deprecated and will be removed.',
-        );
-        fallbackWarned = true;
-      }
-      return fallbackToken;
+    const cred = await bundle.service.getCredential({
+      provider: 'META',
+      credentialType: 'PAGE_ACCESS_TOKEN',
+      destinationId,
+    });
+
+    if (!cred) {
+      logger.warn(`[credentials] no DB-backed PAGE_ACCESS_TOKEN for destination ${destinationId}`);
+      throw new CredentialResolutionError(
+        'CREDENTIAL_NOT_FOUND',
+        `No PAGE_ACCESS_TOKEN for destination ${destinationId}`,
+      );
     }
 
-    throw new Error(
-      `No PAGE_ACCESS_TOKEN for destination ${destinationId}: credential service unavailable and META_PAGE_ACCESS_TOKEN is not set`,
-    );
+    if (cred.status === 'INVALID') {
+      logger.warn(`[credentials] destination ${destinationId} has INVALID PAGE_ACCESS_TOKEN in DB`);
+      throw new CredentialResolutionError(
+        'CREDENTIAL_INVALID',
+        `PAGE_ACCESS_TOKEN for destination ${destinationId} is marked INVALID`,
+      );
+    }
+
+    return cred.value;
   };
 }
 

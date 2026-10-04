@@ -47,7 +47,6 @@ export interface WorkerConfig {
   metaGraphApiVersion: string;
   metaAppId: string | undefined;
   metaAppSecret: string | undefined;
-  metaPageAccessToken: string | undefined;
   metaCredentialEncryptionKeys: Record<string, string> | undefined;
   metaCredentialEncryptionActiveVersion: number | undefined;
 }
@@ -132,7 +131,6 @@ export function loadWorkerConfig(): WorkerConfig {
     metaGraphApiVersion: process.env.META_GRAPH_API_VERSION ?? 'v21.0',
     metaAppId: process.env.META_APP_ID,
     metaAppSecret: process.env.META_APP_SECRET,
-    metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN,
 
     metaCredentialEncryptionKeys: parseCredentialKeys(process.env.META_CREDENTIAL_ENCRYPTION_KEYS),
     metaCredentialEncryptionActiveVersion: process.env.META_CREDENTIAL_ENCRYPTION_ACTIVE_VERSION

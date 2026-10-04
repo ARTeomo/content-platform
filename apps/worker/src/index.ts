@@ -157,7 +157,7 @@ async function main(): Promise<void> {
   const credentialBundle = buildMetaCredentialService(db.db, config);
   if (!credentialBundle.available) {
     console.warn(
-      `[worker] DB-backed Meta credentials unavailable: ${credentialBundle.unavailableReason}. Falling back to META_PAGE_ACCESS_TOKEN.`,
+      `[worker] DB-backed Meta credentials unavailable: ${credentialBundle.unavailableReason}. Outbound Meta calls will fail with AUTHENTICATION_ERROR.`,
     );
   } else {
     console.info('[worker] DB-backed Meta credentials available');
@@ -165,15 +165,8 @@ async function main(): Promise<void> {
 
   const getAccessToken = buildGetAccessToken({
     bundle: credentialBundle,
-    fallbackToken: config.metaPageAccessToken,
     logger: console,
   });
-
-  if (!config.metaPageAccessToken && !credentialBundle.available) {
-    console.warn(
-      '[worker] neither META_PAGE_ACCESS_TOKEN nor DB credentials are configured — outbound Meta calls will fail with AUTHENTICATION_ERROR',
-    );
-  }
 
   // ---- rate limiter ----
 

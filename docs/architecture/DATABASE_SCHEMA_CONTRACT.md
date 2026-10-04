@@ -1,14 +1,24 @@
 # Content Platform — Database Schema Contract
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Production-Ready DB v1 Persistence Contract
 **Normative:** Yes — implementation baseline
 **Based on:** DB v1 Logical Model Specification v1.0, Technical Design Specification v0.9.0, DATABASE_SCHEMA_CONTRACT.md v1.0 and v1.1, and the established platform persistence model
 **Scope:** PostgreSQL persistence model for the Content Platform. DB v1 distinguishes the 15-table core logical model defined by the DB v1 Logical Model Specification from supporting platform persistence tables that remain required by the established technical design.
+**Migration set:** starts at `0015`. See §20.1.
 
 **Revision 1.1** extends the v1.0 contract with the inbound Meta integration persistence slice: webhook subscription, webhook event receipt, webhook delivery attempts, external interaction materialization, provider credential storage, interaction response lifecycle, and a unified transactional outbox. These additions are **outside** the DB v1 Logical Model Specification scope and do not alter the core ingestion model, its invariants, or the persistence contract of v1.0.
 
 **Revision 1.2** adds webhook subscription operational health persistence, a hot-path publication lookup index, and documentation refinements to three deferred decisions. It does not alter the inbound aggregate boundary, the interaction natural key, or any table introduced by v1.1. All v1.2 changes are additive or documentation-only.
+
+**Revision 1.3** introduces two aggregate-boundary changes that were deferred from v1.2:
+
+1. **`webhook_endpoints`** (D-013) — an App-level webhook configuration aggregate that owns the verify token, referenced by `webhook_subscriptions.endpoint_id` instead of being duplicated per subscription.
+2. **Provider-aware `external_interactions` natural key** (D-016) — the composite `(interaction_type, external_interaction_id)` is replaced by `(provider, external_interaction_id)`.
+
+Both changes are **aggregate-boundary**, not additive: they require coordinated EXPAND / MIGRATE / SWITCH / CONTRACT migrations and cannot be introduced incrementally. The v1.3 migration set therefore starts at `0015`, not `0013`.
+
+This revision also resolves the v1.2 §21 non-goals for `webhook_endpoints` and `external_interactions.provider`. It does not alter any other table introduced by v1.0, v1.1, or v1.2.
 
 ---
 
@@ -130,6 +140,12 @@ webhook_deliveries
 external_interactions
 ```
 
+And the v1.3 aggregate root:
+
+```text
+webhook_endpoints                    (v1.3 — aggregate root)
+```
+
 The operational health of each subscription is persisted in `webhook_subscription_health` (§3.3.1), following the same separation between configuration and health that DB v1 core applies to source endpoints.
 
 ### 3.3.1 Inbound health companion (1 table) — NEW in v1.2
@@ -199,12 +215,13 @@ The v1.1 and v1.2 additions do not alter this transfer. The `webhook_subscriptio
 ```text
 15  core logical model
 18  supporting platform persistence
- 4  inbound event persistence        (new in v1.1)
- 1  inbound health companion         (new in v1.2)
- 5  provider credentials + response  (new in v1.1)
- 1  platform pattern (outbox)        (new in v1.1)
+ 4  inbound event persistence        (v1.1)
+ 1  inbound health companion         (v1.2)
+ 1  webhook_endpoint aggregate       (v1.3)
+ 5  provider credentials + response  (v1.1)
+ 1  platform pattern (outbox)        (v1.1)
 ---
-44  total
+45  total
 ```
 
 ---
@@ -1193,51 +1210,35 @@ The table is append-only at application level. Corrections are represented by ne
 
 ---
 
-### 5.34 `webhook_subscriptions` — NEW in v1.1
+### 5.34 `webhook_subscriptions` — revised in v1.3
 
-Purpose: technical subscription configuration for an inbound webhook from an external provider to a specific destination.
+Purpose: technical subscription configuration for an inbound webhook from an
+external provider to a specific destination.
 
-A `webhook_subscriptions` row represents a concrete technical subscription belonging to a `destinations` row. It is the inbound analogue of `source_endpoints`: a destination may own multiple subscriptions, and each subscription carries its own verification secret and lifecycle.
+**In v1.3 the App-level verify token moves to `webhook_endpoints` (§5.45).**
+The subscription references the endpoint via `endpoint_id` and no longer
+carries its own `verify_token_encrypted` / `verify_token_key_version`.
 
-| Column                     | Type        | Null | Default   | Constraint                               |
-| -------------------------- | ----------- | ---: | --------- | ---------------------------------------- |
-| `id`                       | uuid        |   no | generated | PK                                       |
-| `destination_id`           | uuid        |   no | —         | FK → `destinations.id` ON DELETE CASCADE |
-| `provider`                 | varchar(32) |   no | —         | e.g. `META`                              |
-| `fields`                   | text[]      |   no | —         | non-empty array                          |
-| `verify_token_encrypted`   | text        |   no | —         | `v1:base64(iv ‖ ct ‖ tag)`               |
-| `verify_token_key_version` | integer     |   no | —         | `> 0`                                    |
-| `status`                   | varchar(32) |   no | —         | `ACTIVE`, `PAUSED`, `DISABLED`           |
-| `last_verified_at`         | timestamptz |  yes | —         | —                                        |
-| `last_rotated_at`          | timestamptz |  yes | —         | —                                        |
-| `created_at`               | timestamptz |   no | now       | —                                        |
-| `updated_at`               | timestamptz |   no | now       | —                                        |
+| Column             | Type        | Null | Default   | Constraint                                     |
+| ------------------ | ----------- | ---: | --------- | ---------------------------------------------- |
+| `id`               | uuid        |   no | generated | PK                                             |
+| `destination_id`   | uuid        |   no | —         | FK → `destinations.id` ON DELETE CASCADE       |
+| `endpoint_id`      | uuid        |   no | —         | FK → `webhook_endpoints.id` ON DELETE RESTRICT |
+| `provider`         | varchar(32) |   no | —         | e.g. `META`                                    |
+| `fields`           | text[]      |   no | —         | non-empty array                                |
+| `status`           | varchar(32) |   no | —         | `ACTIVE`, `PAUSED`, `DISABLED`                 |
+| `last_verified_at` | timestamptz |  yes | —         | —                                              |
+| `last_rotated_at`  | timestamptz |  yes | —         | —                                              |
+| `created_at`       | timestamptz |   no | now       | —                                              |
+| `updated_at`       | timestamptz |   no | now       | —                                              |
 
-Unique constraint:
+**Removed in v1.3 (CONTRACT phase, migration 0017):**
+`verify_token_encrypted`, `verify_token_key_version`.
 
-```text
-(destination_id, provider)
-```
+**Added in v1.3 (EXPAND phase, migration 0015; made NOT NULL in 0017):**
+`endpoint_id`.
 
-Invariants:
-
-- `fields` is a non-empty array; each element is validated against the domain vocabulary (`feed`, `mention`, and future values).
-- `verify_token_encrypted` is never decrypted outside the ingress handler.
-- The verify token is encrypted with `WEBHOOK_TOKEN_ENCRYPTION_KEY`, which is distinct from `META_CREDENTIAL_ENCRYPTION_KEY`.
-
-Lifecycle:
-
-```text
-ACTIVE
-PAUSED
-DISABLED
-```
-
-The `hub.challenge` handshake updates `last_verified_at` only. Verify token rotation is a manual administrative operation and must produce an `audit_logs` entry.
-
-Operational health for this subscription is persisted in `webhook_subscription_health` (§5.44). The `last_verified_at` column on this table records a configuration lifecycle event (successful `hub.challenge` handshake); it is distinct from `webhook_subscription_health.last_success_at`, which records a successfully processed inbound delivery.
-
-**Multi-page scope note.** In v1.2, the App-level verify token is duplicated per subscription. This is a known limitation of the current aggregate boundary. The `webhook_endpoints` table and the accompanying refactor are deferred to v1.3 (see D-013).
+Unique constraint: `(destination_id, provider)`.
 
 ---
 
@@ -1325,11 +1326,9 @@ UNKNOWN
 
 ---
 
-### 5.37 `external_interactions` — NEW in v1.1
+### 5.37 `external_interactions` — revised in v1.3
 
 Purpose: materialized inbound interaction derived from a `webhook_events` row.
-
-This is the inbound domain's independent business entity. It carries its own identity and references content lifecycle entities only loosely and optionally.
 
 | Column                    | Type        | Null | Default   | Constraint                                  |
 | ------------------------- | ----------- | ---: | --------- | ------------------------------------------- |
@@ -1337,35 +1336,20 @@ This is the inbound domain's independent business entity. It carries its own ide
 | `webhook_event_id`        | uuid        |  yes | —         | FK → `webhook_events.id` ON DELETE SET NULL |
 | `destination_id`          | uuid        |  yes | —         | FK → `destinations.id` ON DELETE SET NULL   |
 | `publication_id`          | uuid        |  yes | —         | FK → `publications.id` ON DELETE SET NULL   |
+| `provider`                | varchar(32) |   no | —         | `META` (v1.3)                               |
 | `interaction_type`        | varchar(32) |   no | —         | `COMMENT`, `REACTION`, `MENTION`            |
-| `external_interaction_id` | text        |   no | —         | Meta-side identifier                        |
-| `parent_external_id`      | text        |  yes | —         | reply target, if any                        |
-| `actor_external_id`       | text        |  yes | —         | Meta user identifier                        |
-| `actor_display_name`      | text        |  yes | —         | —                                           |
-| `content`                 | text        |  yes | —         | comment text, if any                        |
-| `permalink`               | text        |  yes | —         | —                                           |
+| `external_interaction_id` | text        |   no | —         | provider-side identifier                    |
 | `occurred_at`             | timestamptz |   no | —         | provider event time                         |
 | `raw_metadata`            | jsonb       |   no | `{}`      | —                                           |
 | `created_at`              | timestamptz |   no | now       | —                                           |
 | `updated_at`              | timestamptz |   no | now       | —                                           |
 
-Unique constraint:
+**v1.3 natural-key change:**
 
 ```text
-(interaction_type, external_interaction_id)
+v1.2: UNIQUE (interaction_type, external_interaction_id)
+v1.3: UNIQUE (provider, external_interaction_id)
 ```
-
-Invariants:
-
-- The `(interaction_type, external_interaction_id)` pair is the natural external identity.
-- `occurred_at` is monotonically advancing per interaction under concurrent updates; a stale event must not overwrite a fresher one.
-- Soft deletion (`verb = "remove"`) is represented in `raw_metadata` and does not physically delete the row.
-
-Foreign key behavior:
-
-- `webhook_event_id`, `destination_id`, and `publication_id` are all `ON DELETE SET NULL`. The interaction outlives its originating event, destination, or publication.
-
-The `publication_id` FK to `publications.id` is added by the deferred migration step (0009 in the current migration set) because the `publications` table is created after `external_interactions` in the dependency order. See §19.
 
 ---
 
@@ -1610,6 +1594,38 @@ Scope: **storage now, use later**. The table is part of DB v1.2. Health metrics 
 
 ---
 
+### 5.45 `webhook_endpoints` — NEW in v1.3
+
+Purpose: App-level webhook configuration aggregate that owns the verify token.
+
+| Column                     | Type        | Null | Default   | Constraint                       |
+| -------------------------- | ----------- | ---: | --------- | -------------------------------- |
+| `id`                       | uuid        |   no | generated | PK                               |
+| `provider`                 | varchar(32) |   no | —         | e.g. `META`                      |
+| `name`                     | text        |   no | —         | human label, unique per provider |
+| `verify_token_encrypted`   | text        |   no | —         | `v1:base64(iv ‖ ct ‖ tag)`       |
+| `verify_token_key_version` | integer     |   no | —         | `> 0`                            |
+| `status`                   | varchar(32) |   no | —         | `ACTIVE`, `PAUSED`, `DISABLED`   |
+| `created_at`               | timestamptz |   no | now       | —                                |
+| `updated_at`               | timestamptz |   no | now       | —                                |
+
+Constraints:
+
+```text
+UNIQUE (provider, name)
+CHECK (status IN ('ACTIVE', 'PAUSED', 'DISABLED'))
+CHECK (verify_token_key_version > 0)
+```
+
+### 5.45.1 AAD transition (v1.3)
+
+```text
+v1.1/v1.2: META:WEBHOOK_VERIFY_TOKEN:<destination_id>
+v1.3:      META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>
+```
+
+---
+
 ## 6. Referential Integrity
 
 The canonical ingestion relationship graph from v1.0 is preserved unchanged:
@@ -1643,6 +1659,9 @@ destinations
   ├── provider_credentials
   ├── external_interactions
   └── interaction_responses
+
+webhook_endpoints
+  └── webhook_subscriptions (via endpoint_id, ON DELETE RESTRICT)
 
 webhook_events
   ├── webhook_deliveries
@@ -1735,6 +1754,7 @@ publication_candidates → publications
 destinations → publications
 users → moderation_actions
 users → interaction_moderation_actions
+webhook_endpoints → webhook_subscriptions
 ```
 
 `RESTRICT` prevents accidental deletion of a business-history-referenced entity. The publication history, moderation history, and credential audit trail are not silently removed.
@@ -1766,8 +1786,12 @@ All indexes from v1.0 §8 remain required exactly as specified.
 ### 8.2 Webhook persistence indexes (v1.1)
 
 ```text
+webhook_endpoints(provider, name) UNIQUE
+webhook_endpoints(status)
+
 webhook_subscriptions(destination_id, provider) UNIQUE
 webhook_subscriptions(status)
+webhook_subscriptions(endpoint_id)
 
 webhook_events(idempotency_key) UNIQUE
 webhook_events(status, received_at)
@@ -1778,7 +1802,7 @@ webhook_events(trace_id)
 webhook_deliveries(webhook_event_id, attempt_number) UNIQUE
 webhook_deliveries(status)
 
-external_interactions(interaction_type, external_interaction_id) UNIQUE
+external_interactions(provider, external_interaction_id) UNIQUE   -- v1.3
 external_interactions(publication_id, occurred_at DESC)
 external_interactions(destination_id, occurred_at DESC)
 external_interactions(interaction_type, occurred_at DESC)
@@ -2411,6 +2435,7 @@ Recommended order:
 44. interaction_response_reconciliations
 45. outbox_jobs
 46. webhook_subscription_health
+47. webhook_endpoints
 ```
 
 The apparent count above includes the extension step and the deferred FK step and therefore does not represent a table count. The DB v1 persistence table count is **44 tables**.
@@ -2476,6 +2501,11 @@ The 44-table schema is materialized through a chain of additive migrations. The 
                       interaction_response_reconciliations
 0012 — config:        system_config, config_audit_log
 0013 — observability: ai_usage, system_logs, notifications, audit_logs
+0014 — seed:        seed_rate_limit_budgets
+0015 — v1.3 EXPAND: webhook_endpoints; webhook_subscriptions.endpoint_id
+0016 — v1.3 EXPAND: external_interactions.provider
+0017 — v1.3 CONTRACT: endpoint_id NOT NULL, drop verify_token_*,
+                     provider NOT NULL, swap unique keys
 ```
 
 The `pgcrypto` extension is created in `0000` and is never re-declared.
@@ -2515,8 +2545,6 @@ The following are outside the DB v1 persistence contract unless separately speci
 
 ### Additional non-goals introduced by v1.2
 
-- App-level webhook configuration aggregate (`webhook_endpoints`) — deferred to v1.3 (D-013).
-- Provider-aware natural key for `external_interactions` — deferred to v1.3 (D-016).
 - Analytics read models for Meta-specific aggregations — deferred beyond v1.3.
 
 These concerns may receive additional persistence structures in later architecture revisions, but they must not be silently added to DB v1.
@@ -2601,6 +2629,16 @@ All structural, source, pipeline, integrity, infrastructure boundary, and migrat
 
 ---
 
+### 22.10 v1.3 additions — structural validation
+
+- `webhook_endpoints` is present with exactly the columns in §5.45.
+- `webhook_subscriptions.endpoint_id` is `NOT NULL` after `0017`.
+- `external_interactions.provider` is `NOT NULL` after `0017`.
+
+### 22.11 v1.3 additions — AAD validation
+
+- The active AAD is `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`.
+
 ## 23. Architectural Invariants
 
 The following invariants are normative for DB v1 and v1.2.
@@ -2651,6 +2689,14 @@ The following invariants are normative for DB v1 and v1.2.
 36. The natural external identity of an `external_interactions` row is expressed as a composite of `interaction_type` and `external_interaction_id`. Provider-aware natural key evolution (adding a `provider` column and switching to `(provider, external_interaction_id)`) is deferred to v1.3 and must not be introduced incrementally.
 
 ---
+
+### 23.4 Introduced by v1.3
+
+37. The App-level webhook verify token is owned by `webhook_endpoints`.
+38. The verify-token AAD is `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`.
+39. The natural external identity of `external_interactions` is
+    `(provider, external_interaction_id)`.
+40. The v1.3 migration set is `0015`–`0017`.
 
 ## 24. Deferred Decisions
 
@@ -2742,15 +2788,12 @@ DB v1.1 interaction responses are template-based and deterministic. AI-assisted 
 
 ### D-013 — Multi-provider vs multi-page webhook scope
 
-Two distinct concerns are separated:
+**Multi-page (within Meta).** Resolved in v1.3. The `webhook_endpoints` table
+(§5.45) owns the App-level `verify_token`.
 
-**Multi-page (within Meta).** Deferred to v1.3. A single Meta App that serves multiple Facebook Pages requires an App-level webhook configuration aggregate — specifically, a `webhook_endpoints` table that owns the App-level `verify_token`, and a refactored `webhook_subscriptions` that references the endpoint instead of duplicating the verify token per Page.
+**Multi-provider (beyond Meta).** Deferred beyond v1.3.
 
-This is an **aggregate boundary** change, not a table addition. It affects the verification flow, the credential rotation flow, the admin configuration UI, the audit trail, the repository layer, the service layer, and the migration layer. It is therefore scheduled as an independent workstream (v1.3), not folded into the additive v1.2 changes.
-
-**Multi-provider (beyond Meta).** Deferred beyond v1.3. The schema is provider-aware where practical (`webhook_subscriptions.provider`, `webhook_events.provider`, `provider_credentials.provider`), but the extraction logic, response policy, and credential validation are Meta-specific.
-
-**Status: DEFERRED — NON-BLOCKING (multi-page → v1.3; multi-provider → v1.3+)**
+**Status: PARTIALLY RESOLVED IN v1.3 (multi-page).**
 
 ### D-014 — Outbox payload schema versioning
 
@@ -2766,29 +2809,10 @@ This is an **aggregate boundary** change, not a table addition. It affects the v
 
 ### D-016 — Provider-aware natural key for `external_interactions`
 
-DB v1.2 uses `(interaction_type, external_interaction_id)` as the natural external identity of an `external_interactions` row. This composite constraint is preserved unchanged from v1.1.
+Resolved in v1.3. The composite `(interaction_type, external_interaction_id)`
+is replaced by `(provider, external_interaction_id)`.
 
-The long-term natural key is expected to be `(provider, external_interaction_id)`, because:
-
-- the rest of the schema is deliberately provider-aware (`webhook_events.provider`, `provider_credentials.provider`, `webhook_subscriptions.provider`);
-- different providers may not guarantee global uniqueness of their external identifiers;
-- the `interaction_type` axis does not model the provider boundary and would be insufficient if a non-Meta provider were added.
-
-A provider-aware refactor is deferred to v1.3, where it will be performed together with the `webhook_endpoints` introduction and multi-page Meta support. The v1.3 migration will:
-
-1. add a `provider` column to `external_interactions`;
-2. backfill existing rows with `'META'`;
-3. replace the composite `(interaction_type, external_interaction_id)` constraint with `(provider, external_interaction_id)`.
-
-Introducing a narrower constraint (`UNIQUE (external_interaction_id)`) in v1.2 is explicitly rejected because it would:
-
-- assume a Meta-specific global uniqueness guarantee that may not hold for future providers;
-- create an asymmetry with the rest of the schema's provider-aware pattern;
-- require a second migration in v1.3 to widen the constraint to `(provider, external_interaction_id)`.
-
-The v1.2 scope is additive and constraint-tightening only in cases that do not touch domain identity. The natural key of an external interaction is domain identity; it is therefore not modified in v1.2.
-
-**Status: DEFERRED — NON-BLOCKING (scheduled for v1.3)**
+**Status: RESOLVED IN v1.3.**
 
 ---
 
@@ -2854,7 +2878,7 @@ This three-line pattern is the essence of the outbox. Every other concern is inf
 
 ## 26. Contract Status
 
-**FINAL — PRODUCTION-READY DB v1 BASELINE WITH META INTEGRATION (v1.2)**
+**FINAL — PRODUCTION-READY DB v1 BASELINE WITH META INTEGRATION (v1.3)**
 
 This document is the normative physical persistence baseline for implementation. It is ready to serve as the direct basis for the Drizzle schema and clean DB v1 migration set.
 
@@ -2867,22 +2891,22 @@ The v1.1 additions extended the persistence contract with:
 - interaction response lifecycle;
 - a unified transactional outbox.
 
-The v1.2 additions are:
+The v1.3 additions are:
 
-- `webhook_subscription_health` (inbound health companion, mirroring `source_endpoint_health`);
-- `publications(external_post_id)` partial index (webhook processing hot path);
-- documentation refinements to D-008, D-009, and D-013;
-- a new deferred decision D-016 clarifying the future provider-aware natural key evolution.
+- `webhook_endpoints` (new table, §5.45);
+- `webhook_subscriptions.endpoint_id` — FK to `webhook_endpoints`;
+- `webhook_subscriptions.verify_token_encrypted` and `verify_token_key_version` — dropped in `0017`;
+- `external_interactions.provider` — new NOT NULL column;
+- `external_interactions` natural key — `(provider, external_interaction_id)`.
 
-The v1.2 additions do not alter the aggregate boundary, the interaction natural key, or any table introduced by v1.1.
-
-The complete DB v1.2 persistence table count is **44 tables**, organized into six categories:
+The complete DB v1.3 persistence table count is **45 tables**, organized into seven categories:
 
 ```text
 15  core logical model
 18  supporting platform persistence
  4  inbound event persistence        (v1.1)
  1  inbound health companion         (v1.2)
+ 1  webhook_endpoint aggregate       (v1.3)
  5  provider credentials + response  (v1.1)
  1  platform pattern (outbox)        (v1.1)
 ```

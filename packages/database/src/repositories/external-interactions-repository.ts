@@ -10,6 +10,8 @@ export interface ExternalInteractionDraft {
   webhookEventId?: string;
   destinationId?: string;
   publicationId?: string;
+  /** Provider that owns the external identifier. Part of the v1.3 natural key. */
+  provider: string;
   interactionType: InteractionType;
   externalInteractionId: string;
   parentExternalId?: string;
@@ -49,6 +51,7 @@ export class ExternalInteractionsRepository {
         webhook_event_id,
         destination_id,
         publication_id,
+        provider,
         interaction_type,
         external_interaction_id,
         parent_external_id,
@@ -63,6 +66,7 @@ export class ExternalInteractionsRepository {
         ${draft.webhookEventId ?? null},
         ${draft.destinationId ?? null},
         ${draft.publicationId ?? null},
+        ${draft.provider},
         ${draft.interactionType},
         ${draft.externalInteractionId},
         ${draft.parentExternalId ?? null},
@@ -73,7 +77,7 @@ export class ExternalInteractionsRepository {
         ${draft.occurredAt.toISOString()}::timestamptz,
         ${JSON.stringify(draft.rawMetadata ?? {})}::jsonb
       )
-      ON CONFLICT (interaction_type, external_interaction_id)
+      ON CONFLICT (provider, external_interaction_id)
       DO UPDATE SET
         webhook_event_id   = EXCLUDED.webhook_event_id,
         destination_id     = EXCLUDED.destination_id,

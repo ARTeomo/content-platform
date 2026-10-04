@@ -120,6 +120,13 @@
       "when": 1791133160065,
       "tag": "0016_external_interactions_provider_expand",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791133520637,
+      "tag": "0017_webhook_endpoints_contract",
+      "breakpoints": true
     }
   ]
 }

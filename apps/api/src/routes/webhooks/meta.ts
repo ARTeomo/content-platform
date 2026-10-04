@@ -29,13 +29,6 @@ interface EndpointRow {
   verify_token_key_version: number;
 }
 
-interface SubscriptionRow {
-  id: string;
-  destination_id: string;
-  verify_token_encrypted: string;
-  verify_token_key_version: number;
-}
-
 export async function metaWebhookRoutes(
   app: FastifyInstance,
   options: MetaWebhookRouteOptions,
@@ -48,15 +41,6 @@ export async function metaWebhookRoutes(
 
   // -------------------------------------------------------------------------
   // POST — webhook event ingress
-  //
-  // Single database transaction per HTTP request:
-  //   1. Resolve the destination from the Meta Page ID.
-  //   2. Insert webhook_events idempotently.
-  //   3. Enqueue outbox job if the event was newly inserted.
-  //
-  // Signature verification, JSON parsing, and Zod validation all run
-  // before the transaction and touch no database state. No Redis call
-  // occurs on the hot path.
   // -------------------------------------------------------------------------
   app.post('/api/v1/webhooks/meta', async (request: FastifyRequest, reply: FastifyReply) => {
     const rawBody = request.rawBody;
@@ -127,13 +111,9 @@ export async function metaWebhookRoutes(
   // -------------------------------------------------------------------------
   // GET — Meta hub.challenge handshake
   //
-  // Meta sends this when the webhook subscription is created or
-  // re-verified. Each active subscription is checked; the first one
-  // whose verify token matches the incoming query parameter wins.
-  //
-  // The verify token is decrypted using the key version stored on the
-  // subscription row, which enables key rotation without a coordinated
-  // downtime.
+  // v1.3 (D-013): the verify token is owned by webhook_endpoints, and the
+  // AAD is META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>. The legacy
+  // subscription-scoped path was removed after migration 0017 (CONTRACT).
   // -------------------------------------------------------------------------
   app.get('/api/v1/webhooks/meta', async (request: FastifyRequest, reply: FastifyReply) => {
     const query = request.query as HandshakeQuery;
@@ -145,11 +125,6 @@ export async function metaWebhookRoutes(
       return reply.code(400).send({ error: 'malformed_payload' });
     }
 
-    // ---- v1.3 D-013b dual-read, phase 1: endpoint-scoped AAD ----
-    //
-    // The v1.3 AAD is META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>. App-level
-    // endpoints are checked first; if any endpoint matches, the
-    // handshake succeeds and the subscription path is skipped.
     const activeEndpoints = await client.sql<EndpointRow[]>`
       SELECT id, verify_token_encrypted, verify_token_key_version
       FROM webhook_endpoints
@@ -171,40 +146,6 @@ export async function metaWebhookRoutes(
             UPDATE webhook_endpoints
             SET last_verified_at = now(), updated_at = now()
             WHERE id = ${ep.id}
-          `;
-          return reply.code(200).type('text/plain').send(challenge);
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    // ---- v1.3 D-013b dual-read, phase 2: legacy subscription-scoped AAD ----
-    //
-    // The v1.1/v1.2 AAD is META:WEBHOOK_VERIFY_TOKEN:<destination_id>.
-    // Active only during the dual-read window; removed after migration
-    // 0017 (D-013c).
-    const allActive = await client.sql<SubscriptionRow[]>`
-      SELECT id, destination_id, verify_token_encrypted, verify_token_key_version
-      FROM webhook_subscriptions
-      WHERE provider = 'META' AND status = 'ACTIVE'
-    `;
-
-    for (const sub of allActive) {
-      try {
-        const decrypted = webhookTokenEncryption.decrypt(
-          {
-            ciphertext: sub.verify_token_encrypted,
-            keyVersion: sub.verify_token_key_version,
-          },
-          sub.destination_id,
-        );
-
-        if (webhookTokenEncryption.safeEqual(decrypted, verifyToken)) {
-          await client.sql`
-            UPDATE webhook_subscriptions
-            SET last_verified_at = now(), updated_at = now()
-            WHERE id = ${sub.id}
           `;
           return reply.code(200).type('text/plain').send(challenge);
         }

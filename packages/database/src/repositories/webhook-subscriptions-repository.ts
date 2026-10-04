@@ -11,12 +11,10 @@ type WebhookSubscriptionHealthRow = typeof webhookSubscriptionHealth.$inferSelec
 
 export interface WebhookSubscriptionInput {
   destinationId: string;
-  /** The owning webhook endpoint. Optional during the v1.3 EXPAND phase. */
-  endpointId?: string;
+  /** The owning webhook endpoint. */
+  endpointId: string;
   provider: string;
   fields: string[];
-  verifyTokenEncrypted: string;
-  verifyTokenKeyVersion: number;
   status?: 'ACTIVE' | 'PAUSED' | 'DISABLED';
 }
 
@@ -35,11 +33,9 @@ export class WebhookSubscriptionsRepository {
       .insert(webhookSubscriptions)
       .values({
         destinationId: input.destinationId,
-        ...(input.endpointId !== undefined && { endpointId: input.endpointId }),
+        endpointId: input.endpointId,
         provider: input.provider,
         fields: input.fields,
-        verifyTokenEncrypted: input.verifyTokenEncrypted,
-        verifyTokenKeyVersion: input.verifyTokenKeyVersion,
         status: input.status ?? 'ACTIVE',
       })
       .returning();

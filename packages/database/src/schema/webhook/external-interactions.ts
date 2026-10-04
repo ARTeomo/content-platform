@@ -47,11 +47,11 @@ export const externalInteractions = pgTable(
       onDelete: 'set null',
     }),
     /**
-     * Provider that owns the external identifier. Nullable during the
-     * v1.3 EXPAND phase; made NOT NULL by migration 0017 after the
-     * backfill. See DATABASE_SCHEMA_CONTRACT.md §5.37.
+     * Provider that owns the external identifier. Part of the v1.3
+     * natural key: (provider, external_interaction_id).
+     * See DATABASE_SCHEMA_CONTRACT.md §5.37.
      */
-    provider: varchar('provider', { length: 32 }),
+    provider: varchar('provider', { length: 32 }).notNull(),
     interactionType: varchar('interaction_type', { length: 32 }).notNull(),
     externalInteractionId: text('external_interaction_id').notNull(),
     parentExternalId: text('parent_external_id'),
@@ -65,12 +65,7 @@ export const externalInteractions = pgTable(
     updatedAt: updatedAtColumn(),
   },
   (table) => [
-    uniqueIndex('external_interactions_type_external_id_uq').on(
-      table.interactionType,
-      table.externalInteractionId,
-    ),
-    // v1.3 EXPAND: non-unique index; becomes the unique index in 0017.
-    index('external_interactions_provider_external_id_idx').on(
+    uniqueIndex('external_interactions_provider_external_id_uq').on(
       table.provider,
       table.externalInteractionId,
     ),

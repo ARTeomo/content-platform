@@ -1,14 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  check,
-  index,
-  integer,
-  pgTable,
-  text,
-  uniqueIndex,
-  uuid,
-  varchar,
-} from 'drizzle-orm/pg-core';
+import { check, index, pgTable, text, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { createdAtColumn, idColumn, nullableTimestampColumn, updatedAtColumn } from '../_common.js';
 import { destinations } from '../publication/destinations.js';
 import { webhookEndpoints } from './webhook-endpoints.js';
@@ -36,16 +27,13 @@ export const webhookSubscriptions = pgTable(
       .notNull()
       .references(() => destinations.id, { onDelete: 'cascade' }),
     /**
-     * The owning webhook endpoint. Nullable during the v1.3 EXPAND phase;
-     * made NOT NULL by migration 0017 after the backfill script has run.
+     * The owning webhook endpoint. NOT NULL after v1.3 CONTRACT (0017).
      */
-    endpointId: uuid('endpoint_id').references(() => webhookEndpoints.id, {
-      onDelete: 'restrict',
-    }),
+    endpointId: uuid('endpoint_id')
+      .notNull()
+      .references(() => webhookEndpoints.id, { onDelete: 'restrict' }),
     provider: varchar('provider', { length: 32 }).notNull(),
     fields: text('fields').array().notNull(),
-    verifyTokenEncrypted: text('verify_token_encrypted').notNull(),
-    verifyTokenKeyVersion: integer('verify_token_key_version').notNull(),
     status: varchar('status', { length: 32 }).notNull(),
     lastVerifiedAt: nullableTimestampColumn('last_verified_at'),
     lastRotatedAt: nullableTimestampColumn('last_rotated_at'),
@@ -63,7 +51,6 @@ export const webhookSubscriptions = pgTable(
       'webhook_subscriptions_status_check',
       sql`${table.status} IN ('ACTIVE', 'PAUSED', 'DISABLED')`,
     ),
-    check('webhook_subscriptions_key_version_check', sql`${table.verifyTokenKeyVersion} > 0`),
     check(
       'webhook_subscriptions_fields_nonempty_check',
       sql`array_length(${table.fields}, 1) IS NOT NULL`,

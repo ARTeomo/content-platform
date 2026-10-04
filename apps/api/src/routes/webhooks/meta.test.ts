@@ -121,26 +121,17 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
   });
 
   // ---------------------------------------------------------------------
-  // GET — hub.challenge handshake
+  // GET — hub.challenge handshake (v1.3 endpoint-scoped only)
   // ---------------------------------------------------------------------
 
-  async function insertSubscription(plaintextToken: string, keyVersion = 1): Promise<void> {
-    const encrypted = encryption.encrypt(plaintextToken, destinationId);
-    await client.sql`
-      INSERT INTO webhook_subscriptions (
-        destination_id, provider, fields, verify_token_encrypted,
-        verify_token_key_version, status
-      ) VALUES (
-        ${destinationId}, 'META', ARRAY['feed', 'mention'],
-        ${encrypted.ciphertext}, ${encrypted.keyVersion === keyVersion ? keyVersion : encrypted.keyVersion},
-        'ACTIVE'
-      )
-    `;
-  }
-
-  async function insertEndpoint(plaintextToken: string): Promise<string> {
-    // Generate the id client-side so the ciphertext can be bound to it
-    // in the same INSERT.
+  async function insertEndpoint(
+    plaintextToken: string,
+    overrides: {
+      status?: 'ACTIVE' | 'PAUSED' | 'DISABLED';
+      ciphertext?: string;
+      keyVersion?: number;
+    } = {},
+  ): Promise<string> {
     const id = randomUUID();
     const encrypted = encryption.encryptForEndpoint(plaintextToken, id);
     await client.sql`
@@ -149,14 +140,16 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
         verify_token_key_version, status
       ) VALUES (
         ${id}, 'META', ${'test-endpoint-' + id.slice(0, 8)},
-        ${encrypted.ciphertext}, ${encrypted.keyVersion}, 'ACTIVE'
+        ${overrides.ciphertext ?? encrypted.ciphertext},
+        ${overrides.keyVersion ?? encrypted.keyVersion},
+        ${overrides.status ?? 'ACTIVE'}
       )
     `;
     return id;
   }
 
   it('handshake: accepts the correct verify token and returns hub.challenge', async () => {
-    await insertSubscription('expected-token-123');
+    await insertEndpoint('expected-token-123');
 
     const res = await app.inject({
       method: 'GET',
@@ -167,13 +160,13 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
     expect(res.body).toBe('challenge-abc');
 
     const [row] = await client.sql<{ last_verified_at: Date | null }[]>`
-      SELECT last_verified_at FROM webhook_subscriptions LIMIT 1
+      SELECT last_verified_at FROM webhook_endpoints LIMIT 1
     `;
     expect(row!.last_verified_at).not.toBeNull();
   });
 
   it('handshake: rejects a mismatched verify token with 403', async () => {
-    await insertSubscription('expected-token-123');
+    await insertEndpoint('expected-token-123');
 
     const res = await app.inject({
       method: 'GET',
@@ -191,66 +184,19 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('handshake v1.3: endpoint-scoped match returns 200', async () => {
-    await insertEndpoint('endpoint-token-123');
+  it('handshake: ignores endpoints whose status is not ACTIVE', async () => {
+    await insertEndpoint('paused-token', { status: 'PAUSED' });
 
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=endpoint-token-123&hub.challenge=challenge-ep',
+      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=paused-token&hub.challenge=c',
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('challenge-ep');
-
-    const [row] = await client.sql<{ last_verified_at: Date | null }[]>`
-      SELECT last_verified_at FROM webhook_endpoints LIMIT 1
-    `;
-    expect(row!.last_verified_at).not.toBeNull();
-  });
-
-  it('handshake v1.3 dual-read: subscription-scoped legacy match still works', async () => {
-    await insertSubscription('legacy-token-456');
-
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=legacy-token-456&hub.challenge=challenge-legacy',
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('challenge-legacy');
-  });
-
-  it('handshake v1.3 dual-read: endpoint takes precedence over subscription', async () => {
-    await insertSubscription('shared-token');
-    await insertEndpoint('shared-token');
-
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=shared-token&hub.challenge=c',
-    });
-
-    expect(res.statusCode).toBe(200);
-
-    const [ep] = await client.sql<{ last_verified_at: Date | null }[]>`
-      SELECT last_verified_at FROM webhook_endpoints LIMIT 1
-    `;
-    expect(ep!.last_verified_at).not.toBeNull();
-
-    const [sub] = await client.sql<{ last_verified_at: Date | null }[]>`
-      SELECT last_verified_at FROM webhook_subscriptions LIMIT 1
-    `;
-    expect(sub!.last_verified_at).toBeNull();
+    expect(res.statusCode).toBe(403);
   });
 
   it('handshake: rejects a ciphertext with an unknown key version', async () => {
-    await client.sql`
-      INSERT INTO webhook_subscriptions (
-        destination_id, provider, fields, verify_token_encrypted,
-        verify_token_key_version, status
-      ) VALUES (
-        ${destinationId}, 'META', ARRAY['feed'], 'v1:boguspayload', 99, 'ACTIVE'
-      )
-    `;
+    await insertEndpoint('anything', { ciphertext: 'v1:boguspayload', keyVersion: 99 });
 
     const res = await app.inject({
       method: 'GET',
@@ -258,5 +204,17 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
     });
 
     expect(res.statusCode).toBe(403);
+  });
+
+  it('handshake: a later endpoint in the scan matches when the first does not', async () => {
+    await insertEndpoint('first-token');
+    await insertEndpoint('second-token');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=second-token&hub.challenge=c',
+    });
+
+    expect(res.statusCode).toBe(200);
   });
 });

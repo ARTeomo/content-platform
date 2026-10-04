@@ -35,6 +35,7 @@ export class MentionChangeExtractor implements ChangeExtractor {
       {
         webhookEventId: context.webhookEventId,
         ...(context.destinationId && { destinationId: context.destinationId }),
+        provider: 'META',
         interactionType: 'MENTION',
         externalInteractionId: `${senderId}:${postId}`,
         parentExternalId: postId,

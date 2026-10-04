@@ -55,8 +55,8 @@ describe.skipIf(!TEST_DB_URL)('InteractionResponseSchedulerService', () => {
 
     const [interaction] = await client.sql<{ id: string }[]>`
       INSERT INTO external_interactions (
-        interaction_type, external_interaction_id, occurred_at
-      ) VALUES ('COMMENT', ${externalId}, now())
+        provider, interaction_type, external_interaction_id, occurred_at
+      ) VALUES ('META', 'COMMENT', ${externalId}, now())
       RETURNING id
     `;
 

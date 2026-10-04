@@ -29,6 +29,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
   it('inserts a new interaction', async () => {
     const result = await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-1',
         content: 'hello',
@@ -43,6 +44,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
   it('updates an existing interaction when the incoming event is newer', async () => {
     await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-2',
         content: 'first',
@@ -52,6 +54,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
 
     const result = await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-2',
         content: 'edited',
@@ -66,6 +69,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
   it('skips a stale event (occurred_at older than persisted)', async () => {
     await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-3',
         content: 'newer',
@@ -75,6 +79,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
 
     const result = await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-3',
         content: 'older (should be ignored)',
@@ -89,6 +94,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
   it('preserves the existing publication_id when the incoming event omits it', async () => {
     await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-4',
         content: 'first',
@@ -99,6 +105,7 @@ describe.skipIf(!TEST_DB_URL)('ExternalInteractionsRepository', () => {
 
     const result = await txManager.run(async (tx) =>
       repo.upsertMonotonic(tx, {
+        provider: 'META',
         interactionType: 'COMMENT',
         externalInteractionId: 'comment-4',
         content: 'edited',

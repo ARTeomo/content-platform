@@ -1338,6 +1338,31 @@ Two separate unguarded updates are not sufficient.
 
 ---
 
+### Commitlint type list is narrower than the Conventional Commits standard
+
+The project's `commitlint.config.js` uses a reduced `type-enum`:
+
+```text
+feat fix refactor docs test perf build ci chore revert
+```
+
+Two types present in the standard Conventional Commits spec are
+**absent**: `style` and `doc`. A commit whose subject starts with
+`style:` or `doc(...):` is rejected by the hook, even though both
+forms are valid under the broader spec.
+
+When a change is purely formatting (whitespace, prettier output, markdown
+table alignment), the correct type is `docs(<scope>):` for documentation
+files, or `chore:` for code files. For example:
+
+```text
+docs(audit): apply prettier to baseline audit banner
+```
+
+Before suggesting any commit message, check `commitlint.config.js` for
+the current type list. The toolchain evolves; the list is the source of
+truth.
+
 ### Drizzle snapshot chain breaks with seed-only migrations
 
 Every `_journal.json` entry must have a matching

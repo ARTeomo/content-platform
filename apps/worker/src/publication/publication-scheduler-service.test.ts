@@ -92,7 +92,11 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     service: AlertingService;
     blockedSpy: ReturnType<typeof vi.fn>;
   } {
-    const blockedSpy = vi.fn(async () => {});
+    const blockedSpy = vi.fn(
+      async (_publicationId: string, _destinationId: string, _reason: string) => {
+        // test spy — arguments are captured by the mock framework
+      },
+    );
     const service = {
       async publicationBlocked(publicationId: string, destId: string, reason: string) {
         await blockedSpy(publicationId, destId, reason);

@@ -503,3 +503,175 @@ The system state:
 **Audit prepared by:** development session, 2026-10-03
 
 **Next milestone:** v1.3 — `webhook_endpoints` and multi-Page Meta support (see DATABASE_SCHEMA_CONTRACT.md, deferred decision D-013)
+
+---
+
+## 10. Addendum — Sprint D and CI pipeline (2026-10-04)
+
+The following work was completed after the original sprint audit was
+written. It extends the remediation with one additional functional fix
+and the CI infrastructure that now protects `main`.
+
+### Sprint D — `minIntervalSeconds` enforcement
+
+**Finding.** A follow-up review of the baseline audit identified a gap
+that the original finding list did not cover. The
+`interaction_response.min_interval_seconds` key was loaded from
+`system_config` and stored in `InteractionResponseConfig`, but the
+policy engine never enforced it. The `PolicyInput` did not carry the
+minimum interval, and `DefaultPolicyEngine.decide()` had no check for
+the elapsed time since the last response.
+
+**Impact.** With a configured `minIntervalSeconds` of, say, 300, the
+rate limiter would still permit a second response within seconds of the
+first, as long as the hourly count was below `maxResponsesPerHour`.
+This defeated the intended pacing rule on the interaction response
+path.
+
+**Fix.**
+
+- `PolicyInput` extended with two optional fields:
+  `minIntervalSeconds` and `secondsSinceLastResponse`.
+- `DefaultPolicyEngine.decide()` performs the interval check as step 4
+  (after the rate limit, before the trust-level and rule-matching
+  steps). When `secondsSinceLastResponse < minIntervalSeconds`, the
+  decision is `MODERATION_REQUIRED`.
+- `InteractionResponsesRepository` gained
+  `findLastRespondedAtByDestination(destinationId)`, which returns the
+  `responded_at` of the most recent `RESPONDED` response for a
+  destination, or `null`.
+- `InteractionResponseService.decide()` fetches the timestamp and
+  computes `secondsSinceLastResponse` before constructing the policy
+  input.
+- `buildPolicyInput` forwards both fields only when they are defined
+  and non-zero, preserving the previous behaviour when the config
+  omits a minimum interval.
+
+**Tests.** 7 new tests (5 in the policy engine, 2 in the interaction
+response service). Total test count: 235 → 242.
+
+**Commit.** `2b22c05` — `fix(policy): enforce minIntervalSeconds in the policy engine`
+
+### CI pipeline
+
+**Objective.** Protect the `main` branch with automated checks on every
+push and pull request.
+
+**Workflow.** `.github/workflows/ci.yml` runs four steps on
+`ubuntu-latest`:
+
+1. `pnpm install --frozen-lockfile`
+2. `pnpm format:check`
+3. `pnpm typecheck`
+4. `pnpm test`
+
+The workflow uses `actions/checkout@v4`, `pnpm/action-setup@v4`, and
+`actions/setup-node@v4` with `node-version-file: '.nvmrc'` and pnpm
+store caching. A `concurrency` group cancels superseded runs on the
+same branch.
+
+**Secrets.** The DB- and Redis-backed tests read `TEST_DATABASE_URL`
+and `TEST_REDIS_URL` from repository secrets. When the secrets are
+absent, the affected tests self-skip via the existing
+`describe.skipIf(!TEST_DB_URL)` pattern, and the job still passes with
+the non-DB tests. Both secrets are configured, so the full 242-test
+suite runs in CI against the real Neon PostgreSQL and Upstash Redis
+instances.
+
+**`supportedArchitectures` fix.** The first CI run failed at the
+`Install dependencies` step. The root cause was
+`pnpm-workspace.yaml` restricting `supportedArchitectures.os` to
+`win32` only. As a result, `pnpm install` on the Linux runner
+resolved the Windows variant of the TypeScript 7 native compiler
+(`@typescript/typescript-win32-x64`), and the `postinstall` build
+step then failed with
+`Unable to resolve @typescript/typescript-linux-x64`. The
+`supportedArchitectures` block was extended to include `linux` and
+`darwin` (plus `arm64` for `cpu`), so the lockfile now resolves the
+native binaries for all supported platforms while pnpm still only
+downloads the variant matching the current `process.platform` and
+`process.arch`.
+
+**`pnpm lint` excluded.** The workflow does not run `pnpm lint`. The
+project pins TypeScript `7.0.2`, and
+`typescript-eslint@8.70.0` does not yet support the TS 7 compiler API.
+The failure is at module load:
+
+```text
+typescript-eslint does not support TS 7.0.
+```
+
+Tracked upstream at
+[typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940).
+The lint step will be re-enabled once a compatible release is
+available, or once TypeScript is downgraded to 6.x. The exclusion is
+also recorded as pending item #7 in `HANDOFF.md`.
+
+**Commits.**
+
+- `783d09b` — `ci: add GitHub Actions workflow for build and test`
+- `f0b8e71` — `build: allow linux and darwin native deps in pnpm install`
+- `5421a52` — `ci: trigger workflow with test secrets`
+
+### Baseline audit banner
+
+The baseline audit of 2026-09-20 was preserved unchanged as the
+reference point for the remediation, but a status banner was prepended
+to make its role explicit. The banner:
+
+- states that the document is historical and superseded,
+- links to the sprint audit as the authoritative closure record,
+- lists each finding with its closing commit.
+
+The banner is bounded by an HTML comment
+(`<!-- BASELINE-AUDIT-STATUS-BANNER -->`) so a script can detect and
+avoid duplicating it.
+
+**Commit.** `cefccb1` — `docs(audit): mark baseline audit as superseded by sprint audit`
+
+### Audit filename convention
+
+Both audit files were renamed from the previous `DD-MM-YYYY` convention
+to the ISO 8601 date format `YYYY-MM-DD`:
+
+| Old name                       | New name                       |
+| ------------------------------ | ------------------------------ |
+| `baseline-audit-20-09-2026.md` | `baseline-audit-2026-09-20.md` |
+| `sprint-audit-03-10-2026.md`   | `sprint-audit-2026-10-03.md`   |
+
+The ISO form is unambiguous across locales and matches the convention
+used elsewhere in the repository for machine-readable dates.
+
+**Commit.** `3c5ead7` — `chore(docs): rename audit files to ISO 8601 dates`
+
+### Total commit tally
+
+From `de5a71a` (the pre-remediation `origin/main`):
+
+| #   | Commit    | Subject                                                                  |
+| --- | --------- | ------------------------------------------------------------------------ |
+| 1   | `90e210c` | `feat(worker): wire runtime config, credentials, schedulers`             |
+| 2   | `16675be` | `fix(api): webhook ingress uses a single DB transaction`                 |
+| 3   | `b32c2cd` | `refactor(api): centralize webhook token encryption with key versioning` |
+| 4   | `4849440` | `feat(publishers): add Redis-backed Meta rate limiter`                   |
+| 5   | `3373895` | `fix(worker): atomic claim for webhook and response creation`            |
+| 6   | `587a68b` | `docs(handoff): record sprint B commits and open findings`               |
+| 7   | `97db14d` | `feat(worker): add system rebuild and outbox cleanup queues`             |
+| 8   | `1868ebb` | `docs(handoff): record sprint C commits and close F7, F11, F12`          |
+| 9   | `c9b13e7` | `fix(worker): reconcile UNKNOWN interaction responses`                   |
+| 10  | `cd918e1` | `docs(handoff): refresh test counts after F8 reconciliation fix`         |
+| 11  | `76410d8` | `chore(tooling): add worker dev script and seed migration snapshots`     |
+| 12  | `945b082` | `docs(handoff): record F8, F17, and drizzle snapshot fixes`              |
+| 13  | `9bc9301` | `docs(audit): add sprint audit for 2026-10-03`                           |
+| 14  | `783d09b` | `ci: add GitHub Actions workflow for build and test`                     |
+| 15  | `cadf1af` | `docs(handoff): record eslint / typescript 7 incompatibility`            |
+| 16  | `f0b8e71` | `build: allow linux and darwin native deps in pnpm install`              |
+| 17  | `5421a52` | `ci: trigger workflow with test secrets`                                 |
+| 18  | `2b22c05` | `fix(policy): enforce minIntervalSeconds in the policy engine`           |
+| 19  | `cefccb1` | `docs(audit): mark baseline audit as superseded by sprint audit`         |
+| 20  | `3c5ead7` | `chore(docs): rename audit files to ISO 8601 dates`                      |
+
+**Final state.** 242 tests green locally and in CI. All 17 baseline
+findings closed except `audit_logs` (intentional). One additional
+finding (the `minIntervalSeconds` enforcement gap) closed as part of
+Sprint D. The `main` branch is protected by the CI workflow.

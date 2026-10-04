@@ -1,7 +1,7 @@
 # Content Platform — v1.3 Pre-Development Exhaustive Audit
 
 **Audit date:** 2026-10-04
-**Work order:** `release-gate-audit-2026-10-04.md`
+**Work order:** `v1-3-readiness-audit-work-order-2026-10-04.md`
 **Method:** READ → TRACE → VERIFY → REPORT. No source files were modified.
 
 > **Evidence-basis limitation (auditor's disclosure).** This audit is based

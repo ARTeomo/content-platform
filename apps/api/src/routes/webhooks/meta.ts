@@ -23,6 +23,12 @@ interface HandshakeQuery {
   'hub.challenge'?: string;
 }
 
+interface EndpointRow {
+  id: string;
+  verify_token_encrypted: string;
+  verify_token_key_version: number;
+}
+
 interface SubscriptionRow {
   id: string;
   destination_id: string;
@@ -139,6 +145,45 @@ export async function metaWebhookRoutes(
       return reply.code(400).send({ error: 'malformed_payload' });
     }
 
+    // ---- v1.3 D-013b dual-read, phase 1: endpoint-scoped AAD ----
+    //
+    // The v1.3 AAD is META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>. App-level
+    // endpoints are checked first; if any endpoint matches, the
+    // handshake succeeds and the subscription path is skipped.
+    const activeEndpoints = await client.sql<EndpointRow[]>`
+      SELECT id, verify_token_encrypted, verify_token_key_version
+      FROM webhook_endpoints
+      WHERE provider = 'META' AND status = 'ACTIVE'
+    `;
+
+    for (const ep of activeEndpoints) {
+      try {
+        const decrypted = webhookTokenEncryption.decryptForEndpoint(
+          {
+            ciphertext: ep.verify_token_encrypted,
+            keyVersion: ep.verify_token_key_version,
+          },
+          ep.id,
+        );
+
+        if (webhookTokenEncryption.safeEqual(decrypted, verifyToken)) {
+          await client.sql`
+            UPDATE webhook_endpoints
+            SET last_verified_at = now(), updated_at = now()
+            WHERE id = ${ep.id}
+          `;
+          return reply.code(200).type('text/plain').send(challenge);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    // ---- v1.3 D-013b dual-read, phase 2: legacy subscription-scoped AAD ----
+    //
+    // The v1.1/v1.2 AAD is META:WEBHOOK_VERIFY_TOKEN:<destination_id>.
+    // Active only during the dual-read window; removed after migration
+    // 0017 (D-013c).
     const allActive = await client.sql<SubscriptionRow[]>`
       SELECT id, destination_id, verify_token_encrypted, verify_token_key_version
       FROM webhook_subscriptions

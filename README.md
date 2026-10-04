@@ -6,7 +6,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 [![TypeScript](https://img.shields.io/badge/typescript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tests](https://img.shields.io/badge/tests-208%20passing-brightgreen)](#project-status)
+[![Tests](https://img.shields.io/badge/tests-251%20passing-brightgreen)](#project-status)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -157,7 +157,7 @@ content-platform/
 |   |   |   +-- repositories/      15 repository classes
 |   |   |   +-- transaction/       TransactionManager
 |   |   |   +-- client.ts          Database client factory
-|   |   +-- migrations/            0000 - 0013
+|   |   +-- migrations/            0000 - 0014
 |   |   +-- scripts/               Operational scripts
 |   +-- authentication/            Credential encryption + Meta lifecycle
 |   |   +-- src/
@@ -175,7 +175,7 @@ content-platform/
 +-- docs/                          Documentation
 |   +-- adr/                       Architecture Decision Records
 |   +-- architecture/              Normative technical specifications
-|   +-- audit/                     Baseline audits (not normative)
+|   +-- audit/                     Audit history (not normative)
 |   +-- conventions/               Development conventions
 |   +-- operations/                Deployment and operational runbooks
 |
@@ -223,7 +223,7 @@ hierarchy. They are a reflection on the state, not a normative reference.
 | [`docs/README.md`](./docs/README.md)                                                         | Documentation index and reading order.                                   |
 | [`docs/adr/`](./docs/adr/)                                                                   | Architecture Decision Records.                                           |
 | [`docs/architecture/`](./docs/architecture/)                                                 | System overview, domain model, module map, and normative specifications. |
-| [`docs/audit/`](./docs/audit/)                                                               | Baseline audits reflecting implementation against baseline.              |
+| [`docs/audit/`](./docs/audit/)                                                               | Audit history and readiness assessments.                                 |
 | [`docs/conventions/`](./docs/conventions/)                                                   | Coding standards, commit conventions, migration rules.                   |
 | [`docs/operations/`](./docs/operations/)                                                     | Local setup, deployment, operational runbooks.                           |
 
@@ -356,30 +356,29 @@ the bottom of that document.
 
 ## Project status
 
-**Phase 19 complete.** The architecture, logical model, and database
-schema contract are frozen and stable. The complete two-way Meta
-integration (inbound webhook + outbound publication + interaction
-response) is implemented and verified end-to-end against the real Meta
-Graph API.
+**Phase 20 complete.** The baseline audit remediation is closed. All
+seventeen findings from the sprint audit are resolved, the CI pipeline
+protects `main` with the full test suite against real PostgreSQL and
+Redis, and the system is ready for the v1.3 milestone.
 
 ### Workspace
 
 Six workspace packages:
 
-| Package                         | Purpose                                                                                                                     |   Tests |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------: |
-| `packages/database`             | Drizzle schema, migrations, 15 repositories, `TransactionManager`                                                           |      22 |
-| `packages/authentication`       | AES-256-GCM, `MetaCredentialService`, Graph API client, `MetaErrorMapper`                                                   |      37 |
-| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                      |      21 |
-| `packages/publishers`           | `MetaInteractionAdapter`, `MetaPublisherAdapter`, reconcilers, rate limiter                                                 |      51 |
-| `apps/worker`                   | `OutboxDispatcher`, publication scheduler, `webhook.process`, `webhook.respond`, `content.publish`, `publication.reconcile` |      73 |
-| `apps/api`                      | Fastify webhook ingress (POST + GET)                                                                                        |       4 |
-| **Total**                       |                                                                                                                             | **208** |
+| Package                         | Purpose                                                                                                 |   Tests |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------: |
+| `packages/database`             | Drizzle schema, migrations, 15 repositories, `TransactionManager`                                       |      22 |
+| `packages/authentication`       | AES-256-GCM, `MetaCredentialService`, Graph API client, `MetaErrorMapper`                               |      37 |
+| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                  |      26 |
+| `packages/publishers`           | `MetaInteractionAdapter`, `MetaPublisherAdapter`, reconcilers, rate limiter                             |      56 |
+| `apps/worker`                   | `OutboxDispatcher`, publication scheduler, interaction response scheduler, system queues, observability |     102 |
+| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                         |       8 |
+| **Total**                       |                                                                                                         | **251** |
 
 ### Implemented
 
 - [x] DB v1.2 schema — **44 tables**
-- [x] **14 migrations** (`0000` – `0013`), applied to Neon PostgreSQL
+- [x] **15 migrations** (`0000` – `0014`), applied to Neon PostgreSQL
 - [x] `pgcrypto` extension registered in the baseline migration
 - [x] Partial index `publications(external_post_id) WHERE ... IS NOT NULL`
 - [x] Partial unique index `provider_credentials_unique` with `COALESCE`
@@ -416,45 +415,61 @@ Six workspace packages:
 - [x] **Publication reconciliation** (`publication.reconcile`, `MetaPublicationReconciler`)
 - [x] **Real Meta E2E verified** (Phase 18a inbound, Phase 19e outbound)
 - [x] Monorepo toolchain (pnpm workspaces, TS project references, ESLint flat config)
-- [x] **208 passing tests** against real PostgreSQL and Redis
+- [x] **251 passing tests** against real PostgreSQL and Redis
+- [x] **CI pipeline** (GitHub Actions: install, format, typecheck, test)
 
-### Baseline audit findings (open)
+### Audit status
 
-A baseline audit was performed against the original three baseline
-documents. It identified seven findings that are not yet closed in the
-runtime. These are tracked in
-[`docs/audit/baseline-audit-2026-09-20.md`](./docs/audit/baseline-audit-2026-09-20.md).
+Three audits are recorded in `docs/audit/`:
 
-| Finding | Summary                                                         | Spec reference         |
-| ------- | --------------------------------------------------------------- | ---------------------- |
-| F1      | Webhook ingress transaction boundary (interpretation-dependent) | Meta spec §9.5         |
-| F2      | Interaction response config not loaded from `system_config`     | Meta spec §15.1        |
-| F3      | Interaction response rate limiter is a no-op                    | Meta spec §30.3        |
-| F4      | Publication rate limiter is a no-op                             | Meta spec §30.1, §30.3 |
-| F5      | Credential service not wired into worker outbound path          | Meta spec §26.8        |
-| F6      | Scheduler credential-health gate missing                        | Meta spec §22.3        |
-| F7      | Outbox `system.rebuild` / dedicated cleanup contract            | Meta spec §43.5, §44   |
+- [`baseline-audit-2026-09-20.md`](./docs/audit/baseline-audit-2026-09-20.md)
+  — the original baseline audit. Superseded, kept for reference.
+- [`sprint-audit-2026-10-03.md`](./docs/audit/sprint-audit-2026-10-03.md)
+  — the remediation report. All seventeen findings are closed; the one
+  deliberate deferral (`audit_logs` writer) is documented.
+- [`v1-3-readiness-audit-2026-10-04.md`](./docs/audit/v1-3-readiness-audit-2026-10-04.md)
+  — the pre-v1.3 readiness audit. CONDITIONAL PASS with plan-level
+  corrections required before v1.3 planning starts.
 
-None of these block the DB v1.3 milestone. They are scheduled as
-priority-1 (F5, F6), priority-2 (F2, F3, F4) and priority-3 (F7)
-remediation work.
+**Closure summary:**
+
+| Finding | Summary                                                   | Status |
+| ------- | --------------------------------------------------------- | ------ |
+| F1      | Webhook ingress transaction boundary                      | Closed |
+| F2      | Interaction response config from `system_config`          | Closed |
+| F3      | Interaction response rate limiter                         | Closed |
+| F4      | Publication rate limiter                                  | Closed |
+| F5      | Credential service wired into worker outbound paths       | Closed |
+| F6      | Scheduler credential-health gate                          | Closed |
+| F7      | Outbox `system.rebuild` / `system.outbox.cleanup`         | Closed |
+| F8      | Interaction response scheduler (`UNKNOWN` reconciliation) | Closed |
+| F9      | `shouldInvalidateCredential` propagation                  | Closed |
+| F10     | Webhook verify token key version                          | Closed |
+| F11     | `notifications` table writer                              | Closed |
+| F12     | `system_logs` writer                                      | Closed |
+| F13     | Crypto duplication (two AES-256-GCM implementations)      | Closed |
+| F14     | `WebhookProcessService` race condition                    | Closed |
+| F15     | `InteractionResponseService` race condition               | Closed |
+| F16     | API crypto import from `@content-platform/authentication` | Closed |
+| F17     | Worker `dev` script                                       | Closed |
+
+`audit_logs` is intentionally without a writer — it belongs to the admin
+UI milestone and is a documented deferred decision, not a defect.
 
 ### Next
 
 - [ ] **DB v1.3** — `webhook_endpoints` + multi-page Meta support
-- [ ] Credential service integration into the worker outbound path (F5)
-- [ ] Scheduler credential-health gate (F6)
-- [ ] Configuration loading from `system_config` (F2)
-- [ ] Real rate-limiter enforcement (F3, F4)
-- [ ] `system.rebuild` / `system.outbox.cleanup` queue wiring (F7)
+- [ ] **Sprint E follow-ups** — README refresh (this change), v1.3 plan corrections
+- [ ] **Plan-level corrections** (from the readiness audit):
+  - migration numbering from `0015`
+  - AAD binding correction (`META:WEBHOOK_VERIFY_TOKEN:<destination_id>`)
+  - F5/F6 re-scope (fallback removal, gate semantics)
 - [ ] Admin UI (`apps/admin`)
 - [ ] Analytics read models (`meta_posts`, `meta_comments`, `meta_reactions`)
 
-See [`docs/architecture/META_INTEGRATION_SPECIFICATION.md`](./docs/architecture/META_INTEGRATION_SPECIFICATION.md)
-for the Meta boundary contract, and
-[`HANDOFF.md`](./HANDOFF.md) for the current state snapshot.
-
----
+See [`HANDOFF.md`](./HANDOFF.md) for the current state snapshot and the
+[readiness audit](./docs/audit/v1-3-readiness-audit-2026-10-04.md) for
+the v1.3 preconditions.
 
 ## Roadmap
 
@@ -472,6 +487,10 @@ for the Meta boundary contract, and
 | **Phase 19c**      | Publication reconciliation worker/service/reconciler              | Complete |
 | **Phase 19d**      | Publication scheduler                                             | Complete |
 | **Phase 19e**      | Real Meta outbound E2E + hardening                                | Complete |
+| **Phase 20a**      | Worker runtime wiring (config, credentials, schedulers)           | Complete |
+| **Phase 20b**      | Webhook crypto, rate limiters, atomic claims                      | Complete |
+| **Phase 20c**      | System queues, observability services                             | Complete |
+| **Phase 20d**      | `minIntervalSeconds` enforcement, CI pipeline, audit closure      | Complete |
 | **v1.3**           | `webhook_endpoints`, multi-page Meta support                      | Next     |
 | **v1.4+**          | Analytics read models, materialized views, AI response generation | Planned  |
 

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { interactionResponses } from '../schema/interaction/interaction-responses.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -124,6 +124,29 @@ export class InteractionResponsesRepository {
       )
       .limit(1);
     return row;
+  }
+
+  /**
+   * Timestamp of the most recent RESPONDED response to a destination.
+   *
+   * Used by the interaction response service to enforce the
+   * minimum-interval policy rule. Returns null when no response has
+   * ever been recorded for the destination.
+   */
+  async findLastRespondedAtByDestination(destinationId: string): Promise<Date | null> {
+    const [row] = await this.db
+      .select({ respondedAt: interactionResponses.respondedAt })
+      .from(interactionResponses)
+      .where(
+        and(
+          eq(interactionResponses.destinationId, destinationId),
+          eq(interactionResponses.status, 'RESPONDED'),
+          isNotNull(interactionResponses.respondedAt),
+        ),
+      )
+      .orderBy(desc(interactionResponses.respondedAt))
+      .limit(1);
+    return row?.respondedAt ?? null;
   }
 
   async updateStatus(

@@ -34,6 +34,71 @@ describe('DefaultPolicyEngine', () => {
     expect(decision.reason).toContain('rate limit');
   });
 
+  it('returns MODERATION_REQUIRED when the min interval is not satisfied', () => {
+    const engine = new DefaultPolicyEngine({ rules: [] });
+    const decision = engine.decide(
+      baseInput({
+        secondsSinceLastResponse: 10,
+        minIntervalSeconds: 300,
+      }),
+    );
+    expect(decision.action).toBe('MODERATION_REQUIRED');
+    expect(decision.reason).toContain('min interval not satisfied');
+    expect(decision.reason).toContain('10s < 300s');
+  });
+
+  it('allows the decision to proceed when the min interval is exactly met', () => {
+    const rules: PolicyRule[] = [
+      {
+        id: 'thanks',
+        priority: 1,
+        action: 'AUTO_RESPOND',
+        templateId: 'thanks-template',
+        match: { keywords: ['thanks'] },
+      },
+    ];
+    const engine = new DefaultPolicyEngine({ rules });
+    const decision = engine.decide(
+      baseInput({
+        content: 'thanks for the post!',
+        secondsSinceLastResponse: 300,
+        minIntervalSeconds: 300,
+      }),
+    );
+    expect(decision.action).toBe('AUTO_RESPOND');
+  });
+
+  it('ignores the min interval check when minIntervalSeconds is zero', () => {
+    const engine = new DefaultPolicyEngine({ rules: [] });
+    const decision = engine.decide(
+      baseInput({
+        secondsSinceLastResponse: 0,
+        minIntervalSeconds: 0,
+      }),
+    );
+    expect(decision.reason).toContain('no matching');
+  });
+
+  it('ignores the min interval check when secondsSinceLastResponse is undefined', () => {
+    const engine = new DefaultPolicyEngine({ rules: [] });
+    const decision = engine.decide(
+      baseInput({
+        minIntervalSeconds: 300,
+      }),
+    );
+    expect(decision.reason).toContain('no matching');
+  });
+
+  it('ignores the min interval check when minIntervalSeconds is undefined', () => {
+    const engine = new DefaultPolicyEngine({ rules: [] });
+    const decision = engine.decide(
+      baseInput({
+        secondsSinceLastResponse: 10,
+      }),
+    );
+    expect(decision.reason).toContain('no matching');
+  });
+
   it('returns MODERATION_REQUIRED for LOW trust destinations', () => {
     const engine = new DefaultPolicyEngine({ rules: [] });
     const decision = engine.decide(baseInput({ destinationTrustLevel: 'LOW' }));

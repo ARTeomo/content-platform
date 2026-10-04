@@ -14,11 +14,12 @@ import type {
  *   1. REACTION -> IGNORE
  *   2. MENTION  -> NOTIFICATION_ONLY (v1 default)
  *   3. Rate limit exceeded -> MODERATION_REQUIRED
- *   4. Destination trust level LOW -> MODERATION_REQUIRED
- *   5. Match rules by ascending priority
- *   6. No match -> MODERATION_REQUIRED (fail-closed)
+ *   4. Min interval between responses not satisfied -> MODERATION_REQUIRED
+ *   5. Destination trust level LOW -> MODERATION_REQUIRED
+ *   6. Match rules by ascending priority
+ *   7. No match -> MODERATION_REQUIRED (fail-closed)
  *
- * Steps 1-2 are type-based shortcuts. Steps 3-6 apply to COMMENT.
+ * Steps 1-2 are type-based shortcuts. Steps 3-7 apply to COMMENT.
  *
  * The engine is pure: it does not read from the database, does not call
  * external services, and does not perform any I/O. The caller is
@@ -53,7 +54,22 @@ export class DefaultPolicyEngine implements PolicyEngine {
       };
     }
 
-    // 4. Untrusted destination -> defer to a human.
+    // 4. Minimum interval between responses to the same destination.
+    //    Only enforced when both the threshold and the elapsed time are
+    //    supplied by the caller.
+    if (
+      input.secondsSinceLastResponse !== undefined &&
+      input.minIntervalSeconds !== undefined &&
+      input.minIntervalSeconds > 0 &&
+      input.secondsSinceLastResponse < input.minIntervalSeconds
+    ) {
+      return {
+        action: 'MODERATION_REQUIRED',
+        reason: `min interval not satisfied (${Math.floor(input.secondsSinceLastResponse)}s < ${input.minIntervalSeconds}s)`,
+      };
+    }
+
+    // 5. Untrusted destination -> defer to a human.
     if (input.destinationTrustLevel === 'LOW') {
       return {
         action: 'MODERATION_REQUIRED',
@@ -61,7 +77,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
       };
     }
 
-    // 5. Match rules by ascending priority.
+    // 6. Match rules by ascending priority.
     for (const rule of this.sortedRules) {
       if (!this.matches(rule, input)) continue;
 
@@ -97,7 +113,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
       };
     }
 
-    // 6. Fail-closed: no matching auto-respond rule.
+    // 7. Fail-closed: no matching auto-respond rule.
     return {
       action: 'MODERATION_REQUIRED',
       reason: 'no matching auto-respond rule',

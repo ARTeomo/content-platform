@@ -42,6 +42,7 @@ interface FakeEnv {
   rows: FakeResponseRow[];
   enqueued: { queueName: string; jobId: string }[];
   recentCount: number;
+  lastRespondedAt: Date | null;
 }
 
 function makeEnv(): FakeEnv {
@@ -51,6 +52,7 @@ function makeEnv(): FakeEnv {
     rows,
     enqueued,
     recentCount: 0,
+    lastRespondedAt: null,
     repo: undefined as unknown as InteractionResponsesRepository,
     outbox: undefined as unknown as OutboxRepository,
   };
@@ -62,6 +64,9 @@ function makeEnv(): FakeEnv {
     },
     async countRecentByDestination(): Promise<number> {
       return state.recentCount;
+    },
+    async findLastRespondedAtByDestination(): Promise<Date | null> {
+      return state.lastRespondedAt;
     },
     async create(
       _tx: unknown,
@@ -412,6 +417,73 @@ describe('InteractionResponseService.decide', () => {
     expect(env.rows).toHaveLength(1);
 
     env.repo.findByInteractionId = originalFindByInteractionId;
+  });
+
+  it('defers to moderation when the min interval is not satisfied', async () => {
+    const env = makeEnv();
+    env.lastRespondedAt = new Date(Date.now() - 10_000);
+    const service = new InteractionResponseService({
+      txManager: makeTxManager(),
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const outcome = await service.decide({
+      interaction: interaction(),
+      destination: destination(),
+      publication: null,
+      config: {
+        rules: [
+          {
+            id: 'thanks',
+            priority: 1,
+            action: 'AUTO_RESPOND',
+            templateId: 'thanks-template',
+            match: { keywords: ['thanks'] },
+          },
+        ],
+        maxResponsesPerHour: 20,
+        minIntervalSeconds: 300,
+      },
+      templates,
+    });
+    expect(outcome.kind).toBe('MODERATION_REQUIRED');
+    if (outcome.kind === 'MODERATION_REQUIRED') {
+      expect(outcome.reason).toContain('min interval');
+    }
+    expect(env.enqueued).toEqual([]);
+  });
+
+  it('allows AUTO_RESPOND when the min interval is satisfied', async () => {
+    const env = makeEnv();
+    env.lastRespondedAt = new Date(Date.now() - 400_000);
+    const service = new InteractionResponseService({
+      txManager: makeTxManager(),
+      responsesRepo: env.repo,
+      outboxRepo: env.outbox,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const outcome = await service.decide({
+      interaction: interaction(),
+      destination: destination(),
+      publication: null,
+      config: {
+        rules: [
+          {
+            id: 'thanks',
+            priority: 1,
+            action: 'AUTO_RESPOND',
+            templateId: 'thanks-template',
+            match: { keywords: ['thanks'] },
+          },
+        ],
+        maxResponsesPerHour: 20,
+        minIntervalSeconds: 300,
+      },
+      templates,
+    });
+    expect(outcome.kind).toBe('AUTO_RESPOND');
+    expect(env.enqueued).toHaveLength(1);
   });
 
   it('produces a deterministic requestPayloadHash', () => {

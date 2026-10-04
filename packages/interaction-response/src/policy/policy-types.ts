@@ -36,8 +36,29 @@ export interface PolicyInput {
   actorExternalId?: string;
   content?: string;
   destinationTrustLevel: TrustLevel;
+
+  /** Number of responses sent to this destination in the last hour. */
   recentResponseCount: number;
+
+  /** Maximum number of responses allowed per hour. */
   maxResponsesPerHour: number;
+
+  /**
+   * Minimum required interval between two responses to the same
+   * destination, in seconds.
+   *
+   * When undefined or zero, no minimum interval is enforced.
+   */
+  minIntervalSeconds?: number;
+
+  /**
+   * Seconds elapsed since the last RESPONDED response to this
+   * destination.
+   *
+   * When undefined, no prior response exists and the interval check is
+   * skipped.
+   */
+  secondsSinceLastResponse?: number;
 }
 
 export interface ResponseDecision {

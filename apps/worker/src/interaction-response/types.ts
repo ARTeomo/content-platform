@@ -5,18 +5,12 @@ import type {
   TrustLevel,
 } from '@content-platform/interaction-response';
 
-/**
- * Configuration for the service, loaded from system_config.
- */
 export interface InteractionResponseConfig {
   rules: PolicyRule[];
   maxResponsesPerHour: number;
   minIntervalSeconds: number;
 }
 
-/**
- * Snapshot of an inbound interaction passed to the service.
- */
 export interface InteractionSnapshot {
   id: string;
   destinationId: string;
@@ -29,33 +23,20 @@ export interface InteractionSnapshot {
   publicationId: string | null;
 }
 
-/**
- * Snapshot of the destination.
- */
 export interface DestinationSnapshot {
   id: string;
   name: string;
   trustLevel: TrustLevel;
 }
 
-/**
- * Snapshot of the publication, when the interaction is linked to one.
- */
 export interface PublicationSnapshot {
   id: string;
   title: string;
   externalPostId: string | null;
 }
 
-/**
- * Map of template ID -> template body, loaded from system_config.
- */
 export type TemplateMap = Record<string, string>;
 
-/**
- * The outcome of the decide phase. The caller (worker) uses this to
- * determine what to enqueue or skip.
- */
 export type DecideOutcome =
   | { kind: 'IGNORED'; reason: string }
   | { kind: 'NOTIFICATION_ONLY'; reason: string }
@@ -73,21 +54,36 @@ export type DecideOutcome =
 
 /**
  * Helper: build the policy engine input from service-level inputs.
+ *
+ * `secondsSinceLastResponse` is the elapsed time since the most recent
+ * RESPONDED response to the destination, or undefined when no prior
+ * response exists. `minIntervalSeconds` is only forwarded when it is
+ * greater than zero.
  */
 export function buildPolicyInput(args: {
   interaction: InteractionSnapshot;
   destination: DestinationSnapshot;
   recentResponseCount: number;
+  secondsSinceLastResponse: number | undefined;
   config: InteractionResponseConfig;
 }): PolicyInput {
-  return {
+  const input: PolicyInput = {
     interactionType: args.interaction.interactionType,
-    ...(args.interaction.actorExternalId !== null && {
-      actorExternalId: args.interaction.actorExternalId,
-    }),
-    ...(args.interaction.content !== null && { content: args.interaction.content }),
     destinationTrustLevel: args.destination.trustLevel,
     recentResponseCount: args.recentResponseCount,
     maxResponsesPerHour: args.config.maxResponsesPerHour,
   };
+  if (args.interaction.actorExternalId !== null) {
+    input.actorExternalId = args.interaction.actorExternalId;
+  }
+  if (args.interaction.content !== null) {
+    input.content = args.interaction.content;
+  }
+  if (args.config.minIntervalSeconds > 0) {
+    input.minIntervalSeconds = args.config.minIntervalSeconds;
+  }
+  if (args.secondsSinceLastResponse !== undefined) {
+    input.secondsSinceLastResponse = args.secondsSinceLastResponse;
+  }
+  return input;
 }

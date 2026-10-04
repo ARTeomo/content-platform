@@ -63,12 +63,21 @@ export class InteractionResponseService {
       since,
     );
 
+    const lastRespondedAt = await this.deps.responsesRepo.findLastRespondedAtByDestination(
+      destination.id,
+    );
+    const secondsSinceLastResponse =
+      lastRespondedAt === null
+        ? undefined
+        : Math.max(0, Math.floor((Date.now() - lastRespondedAt.getTime()) / 1000));
+
     const engine = new DefaultPolicyEngine({ rules: config.rules });
     const decision = engine.decide(
       buildPolicyInput({
         interaction,
         destination,
         recentResponseCount,
+        secondsSinceLastResponse,
         config,
       }),
     );

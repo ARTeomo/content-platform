@@ -1,4 +1,5 @@
 <!-- BASELINE-AUDIT-STATUS-BANNER -->
+
 > **Status: historical document — superseded by the sprint audit.**
 >
 > This baseline audit reflects the state of the repository on
@@ -11,25 +12,25 @@
 >
 > Summary of closure (as of 2026-10-04):
 >
-> | Finding | Status |
-> | ------- | ------ |
-> | F1  | ✅ Closed — `16675be` |
-> | F2  | ✅ Closed — `90e210c` |
-> | F3  | ✅ Closed — `4849440` |
-> | F4  | ✅ Closed — `4849440` |
-> | F5  | ✅ Closed — `90e210c` |
-> | F6  | ✅ Closed — `90e210c` |
-> | F7  | ✅ Closed — `97db14d` |
-> | F8  | ✅ Closed — `c9b13e7` |
-> | F9  | ✅ Closed — `90e210c` + `97db14d` |
-> | F10 | ✅ Closed — `b32c2cd` |
-> | F11 | ✅ Closed — `97db14d` |
-> | F12 | 🟡 Partial — `97db14d` (`audit_logs` writer intentionally deferred to the admin UI milestone) |
-> | F13 | ✅ Closed — `b32c2cd` |
-> | F14 | ✅ Closed — `3373895` |
-> | F15 | ✅ Closed — `3373895` |
-> | F16 | ✅ Closed — `b32c2cd` |
-> | F17 | ✅ Closed — `76410d8` |
+> | Finding | Status                                                                                        |
+> | ------- | --------------------------------------------------------------------------------------------- |
+> | F1      | ✅ Closed — `16675be`                                                                         |
+> | F2      | ✅ Closed — `90e210c`                                                                         |
+> | F3      | ✅ Closed — `4849440`                                                                         |
+> | F4      | ✅ Closed — `4849440`                                                                         |
+> | F5      | ✅ Closed — `90e210c`                                                                         |
+> | F6      | ✅ Closed — `90e210c`                                                                         |
+> | F7      | ✅ Closed — `97db14d`                                                                         |
+> | F8      | ✅ Closed — `c9b13e7`                                                                         |
+> | F9      | ✅ Closed — `90e210c` + `97db14d`                                                             |
+> | F10     | ✅ Closed — `b32c2cd`                                                                         |
+> | F11     | ✅ Closed — `97db14d`                                                                         |
+> | F12     | 🟡 Partial — `97db14d` (`audit_logs` writer intentionally deferred to the admin UI milestone) |
+> | F13     | ✅ Closed — `b32c2cd`                                                                         |
+> | F14     | ✅ Closed — `3373895`                                                                         |
+> | F15     | ✅ Closed — `3373895`                                                                         |
+> | F16     | ✅ Closed — `b32c2cd`                                                                         |
+> | F17     | ✅ Closed — `76410d8`                                                                         |
 >
 > The body of this document is preserved as written on 2026-09-20.
 > Read it in conjunction with the sprint audit for the full picture.

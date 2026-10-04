@@ -3,9 +3,75 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-10-03
-**Last commit:** `76410d8` (chore(tooling): add worker dev script and seed migration snapshots)
+**Snapshot date:** 2026-10-04
+**Last commit:** `7daf208` (docs(planning): add v1.3 development plan with readiness corrections)
 **Repository:** https://github.com/ARTeomo/content-platform
+
+---
+
+## Milestone: Phase 20 Sprint D + E — readiness audit follow-ups
+
+Sprint D closed the `minIntervalSeconds` enforcement gap identified in
+the follow-up review of the baseline audit. Sprint E closed three
+additional findings (N5, N6, N10) identified by the v1.3 readiness
+audit.
+
+### Sprint D — `minIntervalSeconds` enforcement
+
+The `interaction_response.min_interval_seconds` key was loaded from
+`system_config` into `InteractionResponseConfig`, but the policy engine
+never enforced it. The policy input did not carry the minimum interval,
+and `DefaultPolicyEngine.decide()` had no check for elapsed time since
+the last response.
+
+The fix extended `PolicyInput` with `minIntervalSeconds` and
+`secondsSinceLastResponse`, added step 4 to `DefaultPolicyEngine.decide()`,
+and introduced `InteractionResponsesRepository.findLastRespondedAtByDestination`.
+The interaction response service now fetches the timestamp and computes
+the elapsed seconds before constructing the policy input.
+
+Commit `2b22c05`.
+
+### Sprint E — credential gate coverage, notifications, README
+
+Three items from the readiness audit:
+
+- **N5** — the scheduler credential gate had zero test coverage.
+  Nine new tests now cover VALID / EXPIRING / INVALID / UNKNOWN,
+  health-check failure, missing credential service, notification
+  emission, one-check-per-destination, and mixed-batch behavior.
+- **N10** — the gate's `markFailed` path emitted no notification.
+  `AlertingService.publicationBlocked` was added and is called from
+  the scheduler after the scan transaction commits.
+- **N6** — the README was stale relative to the Phase 20 state. It
+  now reflects Phase 20 completion, the CI pipeline, and the current
+  test counts.
+
+Commits `af3a36c`, `d24691e`, `cbfab93`.
+
+### Audit trail
+
+Three audit documents are recorded:
+
+- `docs/audit/baseline-audit-2026-09-20.md` — the original baseline
+  audit, superseded, kept for reference.
+- `docs/audit/sprint-audit-2026-10-03.md` — the Phase 20 remediation
+  report. All seventeen findings closed except `audit_logs` (deferred
+  to the admin UI milestone).
+- `docs/audit/v1-3-readiness-audit-2026-10-04.md` — the pre-v1.3
+  audit. CONDITIONAL PASS with four plan-level corrections (N1–N4)
+  and three repository-level follow-ups (N5, N6, N10). All three are
+  now closed.
+
+### v1.3 development plan
+
+The v1.3 plan is committed at
+`docs/planning/v1-3-development-plan-2026-10-04.md`. It records the
+corrected starting facts (migration numbering from `0015`, real AAD
+binding `META:WEBHOOK_VERIFY_TOKEN:<destination_id>`, F5a/F6
+re-scope), the three migrations (`0015`–`0017`), the phase
+breakdown, and the scope boundary (Redis Pub/Sub and credential cache
+are explicitly v1.4+ items).
 
 ---
 
@@ -649,20 +715,20 @@ Six workspace packages:
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
 | `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                          | 22      |
 | `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                  | 37      |
-| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 21      |
+| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 26      |
 | `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter | 56      |
-| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 91      |
+| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 102     |
 | `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 8       |
-| **Total**                       |                                                                                                                       | **235** |
+| **Total**                       |                                                                                                                       | **251** |
 
-The 220-test verification is recorded with `TEST_DATABASE_URL` and
+The 251-test verification is recorded with `TEST_DATABASE_URL` and
 `TEST_REDIS_URL` available. Without those, the DB- and Redis-backed
 tests skip.
 
 ### Database schema
 
 - **44 tables** implementing DB v1.2.
-- **14 migrations** (`0000` – `0013`), applied to Neon PostgreSQL.
+- **15 migrations** (`0000` – `0014`), applied to Neon PostgreSQL.
 - `pgcrypto` extension registered in `0000`, never re-declared.
 - Partial index
   `publications(external_post_id) WHERE ... IS NOT NULL`.
@@ -936,14 +1002,20 @@ future environments.
 
 ## Pending items
 
-### 1. Temporary Meta credential fallback
+### 1. Meta credential fallback removal — v1.3 scope
 
-`MetaCredentialService` is now wired into the worker. The
+`MetaCredentialService` is wired into the worker. The
 `META_PAGE_ACCESS_TOKEN` environment variable remains as a
-deprecation-warned fallback for destinations that do not yet have
-a DB-backed credential. Every fallback use is logged at warn
-level. Remove the fallback path once every destination has a
-`provider_credentials` row.
+deprecation-warned fallback for destinations without a DB-backed
+credential. This is a **migration compatibility fallback**, not an
+accidental leftover.
+
+Removal is scheduled for v1.3 F5a. The scope is defined in
+`docs/planning/v1-3-development-plan-2026-10-04.md` §5.1:
+fallback removal, `refresh-page-token.mjs` DB-write conversion,
+error-category preservation. No cache and no Pub/Sub — the
+single-worker topology and the rate-limited API call pattern make
+them unnecessary at this stage.
 
 ### 2. Secret rotation (unchanged)
 
@@ -1011,6 +1083,19 @@ Resolution options when revisiting:
   drizzle-kit, tsc) is compatible with both.
 - Wait for a typescript-eslint release that supports TS 7, then
   re-enable the lint step in CI.
+
+### 8. v1.3 readiness — contract revision pending
+
+The v1.3 readiness audit recorded CONDITIONAL PASS. The plan is
+committed at `docs/planning/v1-3-development-plan-2026-10-04.md`.
+
+The single precondition before any v1.3 code can land is the
+`DATABASE_SCHEMA_CONTRACT.md` v1.2 → v1.3 revision. The contract is
+the source of truth for the schema; the migration files are
+generated from it. See architectural invariant #15.
+
+The v1.3 plan assumes the contract revision lands first, then the
+`0015`–`0017` migrations, in the order defined in the plan §6.1.
 
 ## Next steps
 
@@ -1080,6 +1165,11 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
     daily budgets atomically. The limiter fails closed when Redis is
     unreachable: an inability to prove compliance is treated as a
     denial.
+15. Every schema change must land in the `DATABASE_SCHEMA_CONTRACT`
+    before the migration is written. The contract is the source of
+    truth; migrations are generated from it. This gate is why the
+    v1.3 workstream cannot start until the contract's v1.3 revision
+    is merged.
 
 ---
 
@@ -1087,6 +1177,54 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
 
 These are lessons learned during Phases 14–19e. They are captured
 here so the next session does not re-encounter them.
+
+### describe.skipIf(!TEST_DB_URL) silently skips DB tests
+
+The DB- and Redis-backed integration tests use the
+`describe.skipIf(!TEST_DB_URL)` pattern. When the environment
+variable is absent, the entire test file is skipped without any
+warning in the standard test output.
+
+The consequence: a default `pnpm test` run without
+`TEST_DATABASE_URL` reports "green" while silently omitting half
+the suite. The CI pipeline provides `TEST_DATABASE_URL` and
+`TEST_REDIS_URL` via repository secrets, so the CI runs the full
+suite; local developers must export the env vars explicitly.
+
+When adding new integration tests, add the same pattern and remember
+that a "passing" local run without the env vars does not exercise
+the new tests.
+
+### Prettier must run after any script-driven markdown edit
+
+When a Node script prepends or modifies a markdown file — especially
+a table — the change bypasses Prettier. `pnpm format` must be run
+**before** the commit, otherwise the CI's `Format check` step
+rejects the push.
+
+This trap fires particularly often for:
+
+- commit message scripts that write to a temporary file
+- banner or status-section injections in audit files
+- test-count or coverage-table updates
+
+Always run `pnpm format` before `git commit`.
+
+### Commitlint type list is narrower than the standard
+
+The project's `commitlint.config.js` uses a reduced `type-enum`:
+
+```text
+feat fix refactor docs test perf build ci chore revert
+```
+
+Two types present in the standard Conventional Commits spec are
+absent: `style` and `doc`. A commit whose subject starts with
+`style:` or `doc(...):` is rejected by the hook, even though both
+forms are valid under the broader spec.
+
+For formatting-only changes, use `docs(<scope>):` for markdown
+files and `chore:` for code files.
 
 ### Stale workspace `dist/*.d.ts` can hide source changes
 

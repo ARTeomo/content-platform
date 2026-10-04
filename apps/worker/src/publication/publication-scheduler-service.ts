@@ -10,67 +10,41 @@ export interface PublicationSchedulerServiceDeps {
   txManager: TransactionManager;
   publicationsRepo: PublicationsRepository;
   outboxRepo: OutboxRepository;
-  /** Maximum number of publications to claim per scan. */
   batchSize: number;
-  /**
-   * A RECONCILIATION publication is considered stale when its updated_at
-   * is older than this many seconds.
-   */
   reconcileStaleThresholdSeconds: number;
   /**
-   * Credential health gate.
-   *
-   * When present, the scheduler consults `healthCheck(destinationId)`
-   * before enqueuing a `content.publish` job. Destinations whose
-   * overall credential status is INVALID are skipped; the publication
-   * row is moved to FAILED so it does not re-enter the scan window.
-   *
-   * When absent, no gate is applied (development / test mode).
+   * Mandatory credential health gate. The worker bootstrap refuses to
+   * start when the credential bundle is unavailable; see
+   * apps/worker/src/index.ts.
    */
-  credentialService?: MetaCredentialService;
-  /**
-   * Optional alerting service. When present, a notification and a
-   * system-log entry are emitted for each publication blocked by the
-   * credential gate.
-   *
-   * Notifications are emitted **after** the scan transaction commits,
-   * so a slow or failing notification write cannot roll back or delay
-   * the durable scheduling decision.
-   */
+  credentialService: MetaCredentialService;
   alerting?: AlertingService;
+  /**
+   * Deduplication window for blocked-publication alerts, ms. Default 6h.
+   * In-memory only — the current topology is a single worker process.
+   */
+  notificationDedupWindowMs?: number;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
 export interface PublicationSchedulerRunResult {
   scheduledCount: number;
   reconciledCount: number;
-  /** Publications skipped because the destination credential was INVALID. */
   blockedByCredentialCount: number;
 }
 
-/**
- * Publication scheduler.
- *
- * Two independent scans:
- *
- *   1. SCHEDULED publications with scheduled_at <= now()
- *      - Atomic transition: SCHEDULED → RESERVED
- *      - Credential health gate per destination
- *      - Outbox enqueue: content.publish:{publicationId}
- *
- *   2. RECONCILIATION publications with updated_at older than the
- *      configured threshold
- *      - Atomic touch: updated_at = now() (status unchanged)
- *      - Outbox enqueue: publication.reconcile:{publicationId}:{ts}
- *
- * Both scans claim rows with FOR UPDATE SKIP LOCKED and perform the
- * state change and the outbox enqueue inside a single transaction.
- */
+const DEFAULT_NOTIFICATION_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000;
+
 export class PublicationSchedulerService {
   private readonly log: Pick<Console, 'info' | 'warn' | 'error'>;
+  private readonly notificationDedupWindowMs: number;
+  /** destinationId → epoch ms of the last blocked-publication alert. */
+  private readonly lastBlockedAlertAt = new Map<string, number>();
 
   constructor(private readonly deps: PublicationSchedulerServiceDeps) {
     this.log = deps.logger ?? console;
+    this.notificationDedupWindowMs =
+      deps.notificationDedupWindowMs ?? DEFAULT_NOTIFICATION_DEDUP_WINDOW_MS;
   }
 
   async runOnce(): Promise<PublicationSchedulerRunResult> {
@@ -86,37 +60,30 @@ export class PublicationSchedulerService {
   private async scanScheduled(): Promise<{ enqueued: number; blocked: number }> {
     const { txManager, publicationsRepo, outboxRepo, batchSize, credentialService } = this.deps;
 
-    // Publications that were blocked by the credential gate during the
-    // transaction. Notifications are emitted after the transaction
-    // commits so the durable scheduling decision is not delayed by a
-    // slow alerting write.
     const blockedForNotification: Array<{
       publicationId: string;
       destinationId: string;
+      reason: 'credential_invalid' | 'credential_unknown';
     }> = [];
 
     const result = await txManager.run(async (tx) => {
       const ids = await publicationsRepo.claimDueScheduled(tx, batchSize);
       if (ids.length === 0) return { enqueued: 0, blocked: 0 };
 
-      // Batch lookup of destinationId per publication.
       const destinationByPublication = await publicationsRepo.findDestinationIdsByIds(tx, ids);
 
-      // Batch health check per destination (one call per unique destination).
       const healthByDestination = new Map<string, MetaCredentialStatus>();
-      if (credentialService) {
-        const uniqueDestinations = new Set(destinationByPublication.values());
-        for (const destinationId of uniqueDestinations) {
-          try {
-            const report = await credentialService.healthCheck(destinationId);
-            healthByDestination.set(destinationId, report.overall);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.log.error(
-              `[publication.schedule] credential health check failed for ${destinationId}: ${msg}`,
-            );
-            healthByDestination.set(destinationId, 'UNKNOWN');
-          }
+      const uniqueDestinations = new Set(destinationByPublication.values());
+      for (const destinationId of uniqueDestinations) {
+        try {
+          const report = await credentialService.healthCheck(destinationId);
+          healthByDestination.set(destinationId, report.overall);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log.error(
+            `[publication.schedule] credential health check failed for ${destinationId}: ${msg}`,
+          );
+          healthByDestination.set(destinationId, 'UNKNOWN');
         }
       }
 
@@ -127,15 +94,18 @@ export class PublicationSchedulerService {
         const destinationId = destinationByPublication.get(id);
         const health = destinationId ? healthByDestination.get(destinationId) : undefined;
 
-        if (health === 'INVALID' && destinationId) {
+        // Block on INVALID (definitive) and UNKNOWN (transient/unknown).
+        // Both mean the credential cannot be trusted right now.
+        if (destinationId && (health === 'INVALID' || health === 'UNKNOWN')) {
+          const reason: 'credential_invalid' | 'credential_unknown' =
+            health === 'INVALID' ? 'credential_invalid' : 'credential_unknown';
           this.log.warn(
-            `[publication.schedule] skipping ${id}: destination ${destinationId} has INVALID credentials`,
+            `[publication.schedule] skipping ${id}: destination ${destinationId} credentials are ${health}`,
           );
-          // Move to FAILED so the row does not re-enter the scan window.
-          // The operator can reset it to SCHEDULED after fixing the
-          // credential.
+          // FAILED is terminal: resetting to SCHEDULED would re-enter the
+          // scan window and risk a loop.
           await publicationsRepo.markFailed(tx, id);
-          blockedForNotification.push({ publicationId: id, destinationId });
+          blockedForNotification.push({ publicationId: id, destinationId, reason });
           blocked++;
           continue;
         }
@@ -151,15 +121,17 @@ export class PublicationSchedulerService {
       return { enqueued, blocked };
     });
 
-    // Emit alerts after commit. Best-effort — failures here do not
-    // affect the scheduler's durable work.
+    // At most one alert per destination per dedup window.
     if (this.deps.alerting && blockedForNotification.length > 0) {
-      for (const { publicationId, destinationId } of blockedForNotification) {
-        await this.deps.alerting.publicationBlocked(
-          publicationId,
-          destinationId,
-          'credential_invalid',
-        );
+      const now = Date.now();
+      const sentThisTick = new Set<string>();
+      for (const { publicationId, destinationId, reason } of blockedForNotification) {
+        if (sentThisTick.has(destinationId)) continue;
+        const last = this.lastBlockedAlertAt.get(destinationId);
+        if (last !== undefined && now - last < this.notificationDedupWindowMs) continue;
+        sentThisTick.add(destinationId);
+        this.lastBlockedAlertAt.set(destinationId, now);
+        await this.deps.alerting.publicationBlocked(publicationId, destinationId, reason);
       }
     }
 
@@ -169,14 +141,12 @@ export class PublicationSchedulerService {
   private async scanStaleReconciliation(): Promise<number> {
     const { txManager, publicationsRepo, outboxRepo, batchSize, reconcileStaleThresholdSeconds } =
       this.deps;
-
     return await txManager.run(async (tx) => {
       const ids = await publicationsRepo.touchStaleReconciliation(
         tx,
         reconcileStaleThresholdSeconds,
         batchSize,
       );
-
       const ts = Date.now();
       for (const id of ids) {
         await outboxRepo.enqueue(tx, {
@@ -185,7 +155,6 @@ export class PublicationSchedulerService {
           payload: { publicationId: id },
         });
       }
-
       return ids.length;
     });
   }

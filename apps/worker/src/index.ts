@@ -155,13 +155,13 @@ async function main(): Promise<void> {
   // ---- Meta credential bridge ----
 
   const credentialBundle = buildMetaCredentialService(db.db, config);
-  if (!credentialBundle.available) {
-    console.warn(
-      `[worker] DB-backed Meta credentials unavailable: ${credentialBundle.unavailableReason}. Outbound Meta calls will fail with AUTHENTICATION_ERROR.`,
+  if (!credentialBundle.available || !credentialBundle.service) {
+    throw new Error(
+      `[worker] FATAL: DB-backed Meta credentials are required to start. ` +
+        `${credentialBundle.unavailableReason ?? 'credential service unavailable'}`,
     );
-  } else {
-    console.info('[worker] DB-backed Meta credentials available');
   }
+  console.info('[worker] DB-backed Meta credentials available');
 
   const getAccessToken = buildGetAccessToken({
     bundle: credentialBundle,
@@ -370,9 +370,7 @@ async function main(): Promise<void> {
     batchSize: config.publicationScheduleBatchSize,
     reconcileStaleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
     alerting,
-    ...(credentialBundle.service !== undefined && {
-      credentialService: credentialBundle.service,
-    }),
+    credentialService: credentialBundle.service,
   });
 
   const publicationSchedulerWorker = new PublicationSchedulerWorker({

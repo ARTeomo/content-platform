@@ -47,12 +47,13 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
   });
 
   // ---------------------------------------------------------------------
-  // Test helpers
+  // Helpers
   // ---------------------------------------------------------------------
 
-  function buildScheduler(options?: {
-    credentialService?: MetaCredentialService;
+  function buildScheduler(options: {
+    credentialService: MetaCredentialService;
     alerting?: AlertingService;
+    notificationDedupWindowMs?: number;
   }): PublicationSchedulerService {
     return new PublicationSchedulerService({
       txManager,
@@ -60,13 +61,16 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       outboxRepo,
       batchSize: 10,
       reconcileStaleThresholdSeconds: 300,
-      ...(options?.credentialService !== undefined && {
-        credentialService: options.credentialService,
-      }),
-      ...(options?.alerting !== undefined && {
-        alerting: options.alerting,
+      credentialService: options.credentialService,
+      ...(options.alerting !== undefined && { alerting: options.alerting }),
+      ...(options.notificationDedupWindowMs !== undefined && {
+        notificationDedupWindowMs: options.notificationDedupWindowMs,
       }),
     });
+  }
+
+  function permissiveCredentialService(): MetaCredentialService {
+    return makeCredentialService({ [destinationId]: 'VALID', [destinationId2]: 'VALID' });
   }
 
   function makeCredentialService(
@@ -79,11 +83,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
           throw new Error('health check failed');
         }
         const overall = outcomes[destId] ?? 'VALID';
-        return {
-          destinationId: destId,
-          overall,
-          credentials: [],
-        };
+        return { destinationId: destId, overall, credentials: [] };
       },
     } as unknown as MetaCredentialService;
   }
@@ -93,9 +93,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     blockedSpy: ReturnType<typeof vi.fn>;
   } {
     const blockedSpy = vi.fn(
-      async (_publicationId: string, _destinationId: string, _reason: string) => {
-        // test spy — arguments are captured by the mock framework
-      },
+      async (_publicationId: string, _destinationId: string, _reason: string) => {},
     );
     const service = {
       async publicationBlocked(publicationId: string, destId: string, reason: string) {
@@ -121,10 +119,8 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
         (${contentItemId}, ${storyId}, 1, 't', 'c', 's', 'https://scheduler.test/item', 'PASS')
       RETURNING id
     `;
-
     const scheduledAtLiteral =
       input.scheduledAt !== undefined ? input.scheduledAt.toISOString() : null;
-
     const created = await client.sql<{ id: string }[]>`
       INSERT INTO publications
         (publication_candidate_id, destination_id, status, scheduled_at)
@@ -134,7 +130,6 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       RETURNING id
     `;
     const id = created[0]!.id;
-
     if (input.updatedAtAgoSeconds !== undefined) {
       await client.sql`
         UPDATE publications
@@ -142,7 +137,6 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
         WHERE id = ${id}
       `;
     }
-
     return id;
   }
 
@@ -169,13 +163,10 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
-    const scheduler = buildScheduler();
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
     const result = await scheduler.runOnce();
     expect(result.scheduledCount).toBe(1);
-
     expect(await getPublicationStatus(id)).toBe('RESERVED');
-
     const jobs = await client.sql<{ queue_name: string; job_id: string }[]>`
       SELECT queue_name, job_id FROM outbox_jobs
     `;
@@ -189,39 +180,28 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() + 60_000),
     });
-
-    const scheduler = buildScheduler();
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
     const result = await scheduler.runOnce();
     expect(result.scheduledCount).toBe(0);
   });
 
   it('touches a stale RECONCILIATION publication and enqueues publication.reconcile', async () => {
-    const id = await createPublication({
-      status: 'RECONCILIATION',
-      updatedAtAgoSeconds: 3_600,
-    });
-
-    const scheduler = buildScheduler();
+    const id = await createPublication({ status: 'RECONCILIATION', updatedAtAgoSeconds: 3_600 });
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
     const result = await scheduler.runOnce();
     expect(result.reconciledCount).toBe(1);
-
     const jobs = await client.sql<{ queue_name: string; job_id: string }[]>`
       SELECT queue_name, job_id FROM outbox_jobs
     `;
     expect(jobs).toHaveLength(1);
     expect(jobs[0]!.queue_name).toBe('publication.reconcile');
     expect(jobs[0]!.job_id.startsWith(`publication.reconcile:${id}:`)).toBe(true);
-
     expect(await getPublicationStatus(id)).toBe('RECONCILIATION');
   });
 
   it('does not touch a fresh RECONCILIATION publication', async () => {
-    await createPublication({
-      status: 'RECONCILIATION',
-      updatedAtAgoSeconds: 10,
-    });
-
-    const scheduler = buildScheduler();
+    await createPublication({ status: 'RECONCILIATION', updatedAtAgoSeconds: 10 });
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
     const result = await scheduler.runOnce();
     expect(result.reconciledCount).toBe(0);
   });
@@ -231,14 +211,9 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
-    const scheduler = buildScheduler();
-    const first = await scheduler.runOnce();
-    expect(first.scheduledCount).toBe(1);
-
-    const second = await scheduler.runOnce();
-    expect(second.scheduledCount).toBe(0);
-
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    expect((await scheduler.runOnce()).scheduledCount).toBe(1);
+    expect((await scheduler.runOnce()).scheduledCount).toBe(0);
     const [row] = await client.sql<{ c: number }[]>`
       SELECT COUNT(*)::int AS c FROM outbox_jobs WHERE job_id = ${'content.publish:' + id}
     `;
@@ -246,7 +221,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
   });
 
   // ---------------------------------------------------------------------
-  // Credential-gate tests (9 tests)
+  // Credential-gate tests (11 tests)
   // ---------------------------------------------------------------------
 
   it('gate: blocks publication when credential health is INVALID', async () => {
@@ -254,15 +229,42 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
     const scheduler = buildScheduler({
       credentialService: makeCredentialService({ [destinationId]: 'INVALID' }),
     });
-
     const result = await scheduler.runOnce();
     expect(result.scheduledCount).toBe(0);
     expect(result.blockedByCredentialCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await countOutbox()).toBe(0);
+  });
 
+  it('gate: blocks publication when credential health is UNKNOWN', async () => {
+    const id = await createPublication({
+      status: 'SCHEDULED',
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({ [destinationId]: 'UNKNOWN' }),
+    });
+    const result = await scheduler.runOnce();
+    expect(result.scheduledCount).toBe(0);
+    expect(result.blockedByCredentialCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await countOutbox()).toBe(0);
+  });
+
+  it('gate: blocks publication when the health check throws (treated as UNKNOWN)', async () => {
+    const id = await createPublication({
+      status: 'SCHEDULED',
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({}, [destinationId]),
+    });
+    const result = await scheduler.runOnce();
+    expect(result.scheduledCount).toBe(0);
+    expect(result.blockedByCredentialCount).toBe(1);
     expect(await getPublicationStatus(id)).toBe('FAILED');
     expect(await countOutbox()).toBe(0);
   });
@@ -272,15 +274,12 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
     const scheduler = buildScheduler({
       credentialService: makeCredentialService({ [destinationId]: 'VALID' }),
     });
-
     const result = await scheduler.runOnce();
     expect(result.scheduledCount).toBe(1);
     expect(result.blockedByCredentialCount).toBe(0);
-
     expect(await getPublicationStatus(id)).toBe('RESERVED');
     expect(await countOutbox()).toBe(1);
   });
@@ -290,93 +289,48 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
     const scheduler = buildScheduler({
       credentialService: makeCredentialService({ [destinationId]: 'EXPIRING' }),
     });
-
     const result = await scheduler.runOnce();
     expect(result.scheduledCount).toBe(1);
     expect(result.blockedByCredentialCount).toBe(0);
   });
 
-  it('gate: allows publication when credential health is UNKNOWN (current semantics)', async () => {
-    await createPublication({
-      status: 'SCHEDULED',
-      scheduledAt: new Date(Date.now() - 60_000),
-    });
-
-    const scheduler = buildScheduler({
-      credentialService: makeCredentialService({ [destinationId]: 'UNKNOWN' }),
-    });
-
-    const result = await scheduler.runOnce();
-    // Current behavior: only INVALID blocks. UNKNOWN is not blocked.
-    // The v1.3 F6 re-scope will change this to block on UNKNOWN as well.
-    expect(result.scheduledCount).toBe(1);
-    expect(result.blockedByCredentialCount).toBe(0);
-  });
-
-  it('gate: health-check error is treated as UNKNOWN and does not block', async () => {
-    await createPublication({
-      status: 'SCHEDULED',
-      scheduledAt: new Date(Date.now() - 60_000),
-    });
-
-    const scheduler = buildScheduler({
-      credentialService: makeCredentialService({}, [destinationId]),
-    });
-
-    const result = await scheduler.runOnce();
-    expect(result.scheduledCount).toBe(1);
-    expect(result.blockedByCredentialCount).toBe(0);
-  });
-
-  it('gate: no credential service means no gate, all publications enqueued', async () => {
-    await createPublication({
-      status: 'SCHEDULED',
-      scheduledAt: new Date(Date.now() - 60_000),
-    });
-
-    const scheduler = buildScheduler(); // no credentialService
-
-    const result = await scheduler.runOnce();
-    expect(result.scheduledCount).toBe(1);
-    expect(result.blockedByCredentialCount).toBe(0);
-  });
-
-  it('gate: alerting is called for each blocked publication', async () => {
+  it('gate: alerting is called with credential_invalid for an INVALID block', async () => {
     const id = await createPublication({
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
     const { service: alerting, blockedSpy } = makeAlertingSpy();
     const scheduler = buildScheduler({
       credentialService: makeCredentialService({ [destinationId]: 'INVALID' }),
       alerting,
     });
-
     await scheduler.runOnce();
-
     expect(blockedSpy).toHaveBeenCalledTimes(1);
     expect(blockedSpy).toHaveBeenCalledWith(id, destinationId, 'credential_invalid');
   });
 
-  it('gate: one health check per unique destination across a batch', async () => {
-    await createPublication({
+  it('gate: alerting is called with credential_unknown for a UNKNOWN block', async () => {
+    const id = await createPublication({
       status: 'SCHEDULED',
       scheduledAt: new Date(Date.now() - 60_000),
     });
-    await createPublication({
-      status: 'SCHEDULED',
-      scheduledAt: new Date(Date.now() - 60_000),
+    const { service: alerting, blockedSpy } = makeAlertingSpy();
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({ [destinationId]: 'UNKNOWN' }),
+      alerting,
     });
-    await createPublication({
-      status: 'SCHEDULED',
-      scheduledAt: new Date(Date.now() - 60_000),
-    });
+    await scheduler.runOnce();
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+    expect(blockedSpy).toHaveBeenCalledWith(id, destinationId, 'credential_unknown');
+  });
 
+  it('gate: one health check per unique destination across a batch', async () => {
+    await createPublication({ status: 'SCHEDULED', scheduledAt: new Date(Date.now() - 60_000) });
+    await createPublication({ status: 'SCHEDULED', scheduledAt: new Date(Date.now() - 60_000) });
+    await createPublication({ status: 'SCHEDULED', scheduledAt: new Date(Date.now() - 60_000) });
     let healthCheckCount = 0;
     const credentialService = {
       async healthCheck(destId: string): Promise<CredentialHealthReport> {
@@ -384,10 +338,8 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
         return { destinationId: destId, overall: 'VALID', credentials: [] };
       },
     } as unknown as MetaCredentialService;
-
     const scheduler = buildScheduler({ credentialService });
     const result = await scheduler.runOnce();
-
     expect(result.scheduledCount).toBe(3);
     expect(healthCheckCount).toBe(1);
   });
@@ -403,7 +355,6 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       destinationId: destinationId2,
       scheduledAt: new Date(Date.now() - 60_000),
     });
-
     const { service: alerting, blockedSpy } = makeAlertingSpy();
     const scheduler = buildScheduler({
       credentialService: makeCredentialService({
@@ -412,21 +363,83 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       }),
       alerting,
     });
-
     const result = await scheduler.runOnce();
     expect(result.scheduledCount).toBe(1);
     expect(result.blockedByCredentialCount).toBe(1);
-
     expect(await getPublicationStatus(blockedId)).toBe('FAILED');
     expect(await getPublicationStatus(allowedId)).toBe('RESERVED');
-
     expect(blockedSpy).toHaveBeenCalledTimes(1);
     expect(blockedSpy).toHaveBeenCalledWith(blockedId, destinationId, 'credential_invalid');
+  });
+
+  it('gate: dedup — two blocked publications to the same destination produce one alert', async () => {
+    await createPublication({
+      status: 'SCHEDULED',
+      destinationId,
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    await createPublication({
+      status: 'SCHEDULED',
+      destinationId,
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    const { service: alerting, blockedSpy } = makeAlertingSpy();
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({ [destinationId]: 'INVALID' }),
+      alerting,
+    });
+    await scheduler.runOnce();
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('gate: dedup — a second alert within the window is suppressed across ticks', async () => {
+    const { service: alerting, blockedSpy } = makeAlertingSpy();
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({ [destinationId]: 'INVALID' }),
+      alerting,
+      notificationDedupWindowMs: 60_000,
+    });
+    await createPublication({
+      status: 'SCHEDULED',
+      destinationId,
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    await scheduler.runOnce();
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+    await createPublication({
+      status: 'SCHEDULED',
+      destinationId,
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    await scheduler.runOnce();
+    expect(blockedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('gate: dedup — notificationDedupWindowMs=0 disables dedup', async () => {
+    const { service: alerting, blockedSpy } = makeAlertingSpy();
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({ [destinationId]: 'INVALID' }),
+      alerting,
+      notificationDedupWindowMs: 0,
+    });
+    await createPublication({
+      status: 'SCHEDULED',
+      destinationId,
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    await scheduler.runOnce();
+    await createPublication({
+      status: 'SCHEDULED',
+      destinationId,
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    await scheduler.runOnce();
+    expect(blockedSpy).toHaveBeenCalledTimes(2);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Scaffolding helpers — build the FK chain the tests need.
+// Scaffolding
 // ---------------------------------------------------------------------------
 
 async function ensureDestination(client: DatabaseClient, marker: string): Promise<string> {
@@ -434,7 +447,6 @@ async function ensureDestination(client: DatabaseClient, marker: string): Promis
     SELECT id FROM destinations WHERE external_id = ${marker}
   `;
   if (existing[0]) return existing[0].id;
-
   const created = await client.sql<{ id: string }[]>`
     INSERT INTO destinations (name, type, external_id)
     VALUES ('Scheduler Test', 'META', ${marker})
@@ -448,7 +460,6 @@ async function ensureContentItem(client: DatabaseClient, url: string): Promise<s
     SELECT id FROM content_items WHERE canonical_url = ${url} LIMIT 1
   `;
   if (existing[0]) return existing[0].id;
-
   const created = await client.sql<{ id: string }[]>`
     INSERT INTO content_items (canonical_url, status)
     VALUES (${url}, 'PUBLISHED')
@@ -462,7 +473,6 @@ async function ensureStory(client: DatabaseClient, title: string): Promise<strin
     SELECT id FROM stories WHERE title = ${title} LIMIT 1
   `;
   if (existing[0]) return existing[0].id;
-
   const created = await client.sql<{ id: string }[]>`
     INSERT INTO stories (title, status)
     VALUES (${title}, 'ACTIVE')

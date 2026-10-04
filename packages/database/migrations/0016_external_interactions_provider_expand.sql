@@ -1,0 +1,2 @@
+ALTER TABLE "external_interactions" ADD COLUMN "provider" varchar(32);--> statement-breakpoint
+CREATE INDEX "external_interactions_provider_external_id_idx" ON "external_interactions" USING btree ("provider","external_interaction_id");

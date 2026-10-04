@@ -4,6 +4,7 @@ import {
   TransactionManager,
 } from '@content-platform/database';
 import type { MetaCredentialService, MetaCredentialStatus } from '@content-platform/authentication';
+import type { AlertingService } from '../observability/index.js';
 
 export interface PublicationSchedulerServiceDeps {
   txManager: TransactionManager;
@@ -27,6 +28,16 @@ export interface PublicationSchedulerServiceDeps {
    * When absent, no gate is applied (development / test mode).
    */
   credentialService?: MetaCredentialService;
+  /**
+   * Optional alerting service. When present, a notification and a
+   * system-log entry are emitted for each publication blocked by the
+   * credential gate.
+   *
+   * Notifications are emitted **after** the scan transaction commits,
+   * so a slow or failing notification write cannot roll back or delay
+   * the durable scheduling decision.
+   */
+  alerting?: AlertingService;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
@@ -75,7 +86,16 @@ export class PublicationSchedulerService {
   private async scanScheduled(): Promise<{ enqueued: number; blocked: number }> {
     const { txManager, publicationsRepo, outboxRepo, batchSize, credentialService } = this.deps;
 
-    return await txManager.run(async (tx) => {
+    // Publications that were blocked by the credential gate during the
+    // transaction. Notifications are emitted after the transaction
+    // commits so the durable scheduling decision is not delayed by a
+    // slow alerting write.
+    const blockedForNotification: Array<{
+      publicationId: string;
+      destinationId: string;
+    }> = [];
+
+    const result = await txManager.run(async (tx) => {
       const ids = await publicationsRepo.claimDueScheduled(tx, batchSize);
       if (ids.length === 0) return { enqueued: 0, blocked: 0 };
 
@@ -107,7 +127,7 @@ export class PublicationSchedulerService {
         const destinationId = destinationByPublication.get(id);
         const health = destinationId ? healthByDestination.get(destinationId) : undefined;
 
-        if (health === 'INVALID') {
+        if (health === 'INVALID' && destinationId) {
           this.log.warn(
             `[publication.schedule] skipping ${id}: destination ${destinationId} has INVALID credentials`,
           );
@@ -115,6 +135,7 @@ export class PublicationSchedulerService {
           // The operator can reset it to SCHEDULED after fixing the
           // credential.
           await publicationsRepo.markFailed(tx, id);
+          blockedForNotification.push({ publicationId: id, destinationId });
           blocked++;
           continue;
         }
@@ -129,6 +150,20 @@ export class PublicationSchedulerService {
 
       return { enqueued, blocked };
     });
+
+    // Emit alerts after commit. Best-effort — failures here do not
+    // affect the scheduler's durable work.
+    if (this.deps.alerting && blockedForNotification.length > 0) {
+      for (const { publicationId, destinationId } of blockedForNotification) {
+        await this.deps.alerting.publicationBlocked(
+          publicationId,
+          destinationId,
+          'credential_invalid',
+        );
+      }
+    }
+
+    return result;
   }
 
   private async scanStaleReconciliation(): Promise<number> {

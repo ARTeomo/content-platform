@@ -3,6 +3,7 @@ import type { NotificationsRepository, TransactionManager } from '@content-platf
 export type NotificationType =
   | 'credential_failure'
   | 'publication_failure'
+  | 'publication_blocked'
   | 'interaction_response_failure'
   | 'system_failure'
   | 'queue_backlog'

@@ -376,6 +376,7 @@ async function main(): Promise<void> {
     outboxRepo,
     batchSize: config.publicationScheduleBatchSize,
     reconcileStaleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
+    alerting,
     ...(credentialBundle.service !== undefined && {
       credentialService: credentialBundle.service,
     }),

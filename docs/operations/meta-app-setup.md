@@ -189,9 +189,18 @@ Pick something memorable but not guessable:
 
 The **same value** must exist in two places:
 
-1. Encrypted in `webhook_subscriptions.verify_token_encrypted` (via the
-   seed script — see Part 5)
+1. Encrypted in the database — currently in
+   `webhook_subscriptions.verify_token_encrypted` (via the seed script
+   — see Part 5); in the v1.3.1 target state, in
+   `webhook_endpoints.verify_token_encrypted`
 2. In the Meta dashboard Verify Token field (this Part)
+
+**v1.3.1 note.** The v1.3.1 persistence contract moves the App-level
+verify token from `webhook_subscriptions` to a new
+`webhook_endpoints` table. During the migration window, both
+locations may contain the token; after the `0018 CONTRACT` phase,
+only `webhook_endpoints.verify_token_encrypted` remains. See
+`DATABASE_SCHEMA_CONTRACT.md` v1.3.1 §5.34 and §5.35.
 
 If they don't match, Meta returns **HTTP 403** on the handshake.
 
@@ -209,13 +218,28 @@ Click **Verify and save**.
 ### 4.3 What happens behind the scenes
 
 1. Meta sends `GET /api/v1/webhooks/meta?hub.mode=subscribe&hub.verify_token=<VERIFY_TOKEN>&hub.challenge=<RANDOM>`
-2. `apps/api` iterates all `webhook_subscriptions` rows where
-   `provider = 'META' AND status = 'ACTIVE'`
-3. For each row, it decrypts `verify_token_encrypted` using
-   `WEBHOOK_TOKEN_ENCRYPTION_KEY`, with AAD `META:<destination_id>`
+2. `apps/api` attempts endpoint-scoped verification first:
+   - loads all `webhook_endpoints` rows where
+     `provider = 'META' AND status = 'ACTIVE'`
+   - decrypts `verify_token_encrypted` using
+     `WEBHOOK_TOKEN_ENCRYPTION_KEY`, with AAD
+     `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`
+3. If no endpoint matches, it falls back to subscription-scoped
+   verification:
+   - iterates all `webhook_subscriptions` rows where
+     `provider = 'META' AND status = 'ACTIVE'`
+   - decrypts `verify_token_encrypted` using
+     `WEBHOOK_TOKEN_ENCRYPTION_KEY`, with AAD
+     `META:WEBHOOK_VERIFY_TOKEN:<destination_id>`
 4. On match, it returns `<RANDOM>` as `text/plain` and updates
-   `last_verified_at`
+   `last_verified_at` on the matched record
 5. On mismatch, it returns HTTP 403
+
+**v1.3.1 note.** After the `0018 CONTRACT` phase, only the endpoint
+path remains: the handshake reads from `webhook_endpoints` and uses
+AAD `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`. The subscription
+fallback is removed by the migration. See
+`DATABASE_SCHEMA_CONTRACT.md` v1.3.1 §4.6 and §9.6.
 
 **Trap:** if `webhook_subscriptions` has **no row** yet, the loop is
 empty and the handshake always fails with 403. Insert the row first
@@ -649,18 +673,18 @@ Database records:
 
 ## Troubleshooting quick reference
 
-| Symptom                                                                | Likely cause                                                      | Fix                                                   |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------- |
-| Handshake returns 403                                                  | No `webhook_subscriptions` row, or verify token mismatch          | Run seed script with the exact dashboard value        |
-| Handshake succeeds, but no real events arrive                          | App in Development mode                                           | Switch App to Live (Part 8)                           |
-| Test button produces `FAILED / UNKNOWN_DESTINATION`                    | The Test payload uses `entry[0].id = "0"`                         | Expected; test with a real comment (Part 9.2)         |
-| Real comment produces no webhook at all                                | Page not subscribed to App                                        | `POST /{page-id}/subscribed_apps` (Part 7)            |
-| Real comment produces webhook but `item: "status"`                     | You are looking at the post-creation event, not the comment event | Scroll further in `webhook_events`                    |
-| `subscribed_apps` returns empty array                                  | Page not subscribed                                               | Run the POST from Part 7.2                            |
-| Graph API Explorer "User or Page" does not list the Page               | System User token not pasted in Access Token field                | Paste token directly, do not use the dropdown         |
-| Live mode toggle shows red error                                       | Privacy Policy, App Icon, or Category missing                     | Complete all three in App Settings → Basic            |
-| `error_subcode: 2069032` "Felhasználói hozzáférési kód nem támogatott" | Using User Access Token for a Page operation                      | Use Page Access Token or System User token            |
-| ngrok URL changes on restart                                           | Free ngrok tier                                                   | Update Meta Callback URL, or use a paid static domain |
+| Symptom                                                                | Likely cause                                                                    | Fix                                                   |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Handshake returns 403                                                  | No `webhook_endpoints` or `webhook_subscriptions` row, or verify token mismatch | Run seed script with the exact dashboard value        |
+| Handshake succeeds, but no real events arrive                          | App in Development mode                                                         | Switch App to Live (Part 8)                           |
+| Test button produces `FAILED / UNKNOWN_DESTINATION`                    | The Test payload uses `entry[0].id = "0"`                                       | Expected; test with a real comment (Part 9.2)         |
+| Real comment produces no webhook at all                                | Page not subscribed to App                                                      | `POST /{page-id}/subscribed_apps` (Part 7)            |
+| Real comment produces webhook but `item: "status"`                     | You are looking at the post-creation event, not the comment event               | Scroll further in `webhook_events`                    |
+| `subscribed_apps` returns empty array                                  | Page not subscribed                                                             | Run the POST from Part 7.2                            |
+| Graph API Explorer "User or Page" does not list the Page               | System User token not pasted in Access Token field                              | Paste token directly, do not use the dropdown         |
+| Live mode toggle shows red error                                       | Privacy Policy, App Icon, or Category missing                                   | Complete all three in App Settings → Basic            |
+| `error_subcode: 2069032` "Felhasználói hozzáférési kód nem támogatott" | Using User Access Token for a Page operation                                    | Use Page Access Token or System User token            |
+| ngrok URL changes on restart                                           | Free ngrok tier                                                                 | Update Meta Callback URL, or use a paid static domain |
 
 ---
 

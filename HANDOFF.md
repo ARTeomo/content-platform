@@ -3,9 +3,236 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-10-04
-**Last commit:** `7daf208` (docs(planning): add v1.3 development plan with readiness corrections)
+**Snapshot date:** 2026-10-05
+**Last commit:** `4ff04af` (feat(database): complete v1.3.1 CONTRACT migration (0018))
 **Repository:** https://github.com/ARTeomo/content-platform
+
+---
+
+## Milestone: v1.3.1 contract completion
+
+The `DATABASE_SCHEMA_CONTRACT.md` v1.3.1 is now **FINAL** and the DB
+has been migrated to the v1.3.1 target state. This milestone covers the
+two aggregate-boundary changes (D-013 `webhook_endpoints`, D-016
+provider-aware natural key), the AAD-form correction in the Meta setup
+runbook, and the completion migration (`0018`) that closes the schema
+target.
+
+### Commits
+
+| Commit    | Subject                                                                               |
+| --------- | ------------------------------------------------------------------------------------- |
+| `d065190` | `feat(database): add webhook_endpoints schema and 0015 expand migration`              |
+| `72faff0` | `feat(database): webhook_endpoints repository and endpoint_id wiring`                 |
+| `cb9fcee` | `feat(api): dual-read verify-token handshake (endpoint-first, subscription-fallback)` |
+| `5750131` | `feat(database): add external_interactions.provider (v1.3 EXPAND)`                    |
+| `a6dd914` | `feat(database): v1.3 CONTRACT — webhook_endpoints + provider natural key`            |
+| `c4f5c55` | `docs(operations): correct webhook verify-token AAD form`                             |
+| `da4be5a` | `docs(database): finalize DATABASE_SCHEMA_CONTRACT v1.3.1`                            |
+| `4ff04af` | `feat(database): complete v1.3.1 CONTRACT migration (0018)`                           |
+
+**CI note.** The GitHub Actions run for `4ff04af` was queued during a
+GitHub-side incident on 2026-10-05. The job never started; the
+failure recorded in the Actions UI is an infrastructure error, not a
+repository defect. See the "GitHub Actions runner allocation can fail
+during incidents" trap below. When the incident is resolved, re-run
+the workflow from the run page.
+
+### What v1.3.1 changes
+
+**D-013 — App-level webhook configuration aggregate.**
+
+A new `webhook_endpoints` table owns the App-level verify token. The
+`webhook_subscriptions` table references the endpoint via `endpoint_id`
+instead of duplicating the verify token per subscription. This is an
+**aggregate-boundary** change, not a table addition.
+
+**D-016 — Provider-aware natural key.**
+
+The natural external identity of `external_interactions` changes from
+`(interaction_type, external_interaction_id)` to
+`(provider, external_interaction_id)`. The old composite unique index is
+dropped and replaced by `external_interactions_provider_external_id_uq`,
+a **UNIQUE INDEX** (not a `UNIQUE CONSTRAINT`).
+
+**AAD change.**
+
+The webhook verify token AAD is now endpoint-scoped:
+
+```text
+Legacy (v1.2, migration-window only):
+  META:WEBHOOK_VERIFY_TOKEN:<destination_id>
+
+Target (v1.3.1):
+  META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>
+```
+
+The `WebhookTokenEncryptionProvider` supports both forms; the API
+handshake uses endpoint-first verification with subscription fallback.
+
+**Schema target state (reached).**
+
+| Property                                         | v1.2                                          | v1.3.1 target                         |
+| ------------------------------------------------ | --------------------------------------------- | ------------------------------------- |
+| Tables                                           | 44                                            | **45**                                |
+| Migrations                                       | 15 (`0000`–`0014`)                            | **19 (`0000`–`0018`)**                |
+| `webhook_endpoints`                              | —                                             | **present**                           |
+| `webhook_subscriptions.endpoint_id`              | —                                             | **NOT NULL**                          |
+| `webhook_subscriptions.verify_token_encrypted`   | present                                       | **removed**                           |
+| `webhook_subscriptions.verify_token_key_version` | present                                       | **removed**                           |
+| `webhook_subscriptions.last_rotated_at`          | present                                       | **removed**                           |
+| `external_interactions.provider`                 | nullable                                      | **NOT NULL**                          |
+| `external_interactions` natural key              | `(interaction_type, external_interaction_id)` | `(provider, external_interaction_id)` |
+| `provider_credentials` unique index              | `COALESCE` expression index                   | **two partial unique indexes**        |
+
+### Migration chain
+
+```text
+0000  foundation:  pgcrypto, roles, users, destinations
+0001  outbox:      outbox_jobs
+0002  webhook:     webhook_subscriptions, webhook_subscription_health,
+                   webhook_events, webhook_deliveries, external_interactions
+0003  ingestion A: sources, source_endpoints, source_endpoint_health
+0004  ingestion B: discovered_resources, discovery_observations,
+                   provenance_events, raw_resources
+0005  content A:   stories, content_items, content_versions, source_items
+0006  content B:   content_entities, content_categories,
+                   content_fingerprints, duplicate_matches,
+                   content_urls, story_members
+0007  media:       images, image_rights
+0008  publication: publication_candidates, moderation_actions,
+                   publications, publication_attempts,
+                   publication_reconciliations
+0009  deferred FK: external_interactions.publication_id → publications.id
+0010  credential:  provider_credentials
+0011  interaction: interaction_responses, interaction_response_attempts,
+                   interaction_moderation_actions,
+                   interaction_response_reconciliations
+0012  config:      system_config, config_audit_log
+0013  seed:        interaction_response_rules, templates, rate-limit keys
+0014  seed:        meta.rate_limit.budgets
+0015  v1.3 expand: webhook_endpoints; webhook_subscriptions.endpoint_id
+                   (nullable); endpoint_id FK and index
+0016  v1.3 expand: external_interactions.provider (nullable);
+                   transitional non-unique index
+0017  v1.3 contract: backfill provider = 'META';
+                   drop webhook_subscriptions_key_version_check;
+                   drop external_interactions_type_external_id_uq;
+                   drop external_interactions_provider_external_id_idx;
+                   endpoint_id SET NOT NULL;
+                   provider SET NOT NULL;
+                   create external_interactions_provider_external_id_uq;
+                   drop webhook_subscriptions.verify_token_encrypted;
+                   drop webhook_subscriptions.verify_token_key_version
+0018  v1.3.1 complete: drop webhook_subscriptions.last_rotated_at;
+                   drop provider_credentials_unique (COALESCE);
+                   create provider_credentials_app_uq (partial);
+                   create provider_credentials_destination_uq (partial)
+```
+
+**Note:** the v1.3.1 contract specifies a four-phase migration protocol
+(`0015`–`0018` with a Compatibility Bridge deployment state and Hard
+Gates). The current migration chain implements the same target state
+via a three-phase equivalent (`0015`–`0017`) plus a completion
+migration (`0018`) for the two remaining schema gaps. The
+Compatibility Bridge and Hard Gate phases were not implemented because
+the development database was recreatable. A production deployment on a
+populated v1.2 database requires the full four-phase protocol from
+`DATABASE_SCHEMA_CONTRACT.md` v1.3.1 §20.
+
+### Verified target state
+
+The `drizzle.__drizzle_migrations` table contains 19 rows (`0000`–`0018`).
+The `_journal.json` contains 19 entries. Both are in sync.
+
+Verified after migration:
+
+- ✅ `webhook_endpoints` exists with all v1.3.1 columns.
+- ✅ `webhook_subscriptions.endpoint_id` is NOT NULL.
+- ✅ `webhook_subscriptions.verify_token_encrypted` is gone.
+- ✅ `webhook_subscriptions.verify_token_key_version` is gone.
+- ✅ `webhook_subscriptions.last_rotated_at` is gone.
+- ✅ `external_interactions.provider` is NOT NULL.
+- ✅ `external_interactions_provider_external_id_uq` exists.
+- ✅ `external_interactions_type_external_id_uq` is gone.
+- ✅ `provider_credentials_unique` (COALESCE) is gone.
+- ✅ `provider_credentials_app_uq` (partial) exists.
+- ✅ `provider_credentials_destination_uq` (partial) exists.
+
+### E2E verification
+
+A synthetic webhook POST was sent to the running API, and the full
+pipeline processed it end-to-end against the real PostgreSQL and Redis
+instances:
+
+```text
+curl POST → HTTP 200 OK
+  ↓
+webhook_events:        status = PROCESSED
+  ↓
+outbox_jobs:           queue_name = webhook.process, status = DISPATCHED
+  ↓
+external_interactions: interaction_type = COMMENT
+  ↓
+webhook_deliveries:    status = SUCCESS, error_category = null
+```
+
+The worker log confirmed:
+
+```text
+[webhook.process] event be485d4f-d137-4cd0-a416-28d42137849b processed: 1 interactions
+```
+
+This verifies the entire inbound path from ingress to materialization.
+
+### Operational notes
+
+**`drizzle-kit migrate` does not read `.env`.**
+
+The `drizzle.config.ts` reads `process.env.DATABASE_URL`. The
+`pnpm db:migrate` script does not load `.env` automatically. Export the
+variable first:
+
+```bash
+export DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"')"
+pnpm db:migrate
+```
+
+Or run inline:
+
+```bash
+DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"')" pnpm db:migrate
+```
+
+**Never echo environment variable values.**
+
+`DATABASE_URL`, `META_APP_SECRET`, `WEBHOOK_TOKEN_ENCRYPTION_KEY`, and
+`META_CREDENTIAL_ENCRYPTION_KEYS` must never be echoed to the console,
+even partially. To verify a variable is set:
+
+```bash
+[ -n "$DATABASE_URL" ] && echo "DATABASE_URL: set" || echo "MISSING"
+```
+
+To check length only:
+
+```bash
+echo "DATABASE_URL length: ${#DATABASE_URL}"
+```
+
+The `inspect-migrations.mjs` script (added in `4ff04af`) prints schema
+metadata only and never touches environment values.
+
+**Helper script.**
+
+`packages/database/scripts/inspect-migrations.mjs` reports the applied
+migration list, public table list, and the column/index state of the
+v1.3.1-relevant tables. Run it from `packages/database`:
+
+```bash
+cd packages/database
+node --env-file=../../.env scripts/inspect-migrations.mjs
+```
 
 ---
 
@@ -30,8 +257,6 @@ and introduced `InteractionResponsesRepository.findLastRespondedAtByDestination`
 The interaction response service now fetches the timestamp and computes
 the elapsed seconds before constructing the policy input.
 
-Commit `2b22c05`.
-
 ### Sprint E — credential gate coverage, notifications, README
 
 Three items from the readiness audit:
@@ -46,8 +271,6 @@ Three items from the readiness audit:
 - **N6** — the README was stale relative to the Phase 20 state. It
   now reflects Phase 20 completion, the CI pipeline, and the current
   test counts.
-
-Commits `af3a36c`, `d24691e`, `cbfab93`.
 
 ### Audit trail
 
@@ -65,13 +288,19 @@ Three audit documents are recorded:
 
 ### v1.3 development plan
 
-The v1.3 plan is committed at
-`docs/planning/v1-3-development-plan-2026-10-04.md`. It records the
+The original v1.3 plan is committed at
+`docs/planning/v1-3-development-plan-2026-10-04.md`. It recorded the
 corrected starting facts (migration numbering from `0015`, real AAD
 binding `META:WEBHOOK_VERIFY_TOKEN:<destination_id>`, F5a/F6
-re-scope), the three migrations (`0015`–`0017`), the phase
-breakdown, and the scope boundary (Redis Pub/Sub and credential cache
-are explicitly v1.4+ items).
+re-scope), the three-migration structure (`0015`–`0017`), and the
+scope boundary.
+
+This plan is **superseded by the v1.3.1 contract** at
+`docs/architecture/DATABASE_SCHEMA_CONTRACT.md`. The contract defines
+a four-phase migration protocol with a Compatibility Bridge and Hard
+Gates; the actual implementation used a three-phase equivalent plus a
+completion migration. A production upgrade on a populated v1.2
+database requires the full four-phase protocol from the contract.
 
 ---
 
@@ -230,11 +459,13 @@ completing the job.
 The API no longer carries its own AES-256-GCM implementation. A new
 `WebhookTokenEncryptionProvider` in `@content-platform/authentication`
 wraps the existing `CredentialEncryptionProvider` with the webhook
-specific AAD context `META:WEBHOOK_VERIFY_TOKEN:<destinationId>`. The
-subscription's `verify_token_key_version` is read from the row and
-selects the decryption key, enabling key rotation without downtime.
-`safeEqual` provides timing-safe comparison for the incoming verify
-token.
+specific AAD context. In v1.3.1 the provider supports both the legacy
+destination-scoped AAD (`META:WEBHOOK_VERIFY_TOKEN:<destinationId>`)
+and the target endpoint-scoped AAD
+(`META:WEBHOOK_VERIFY_TOKEN:<endpointId>`). The subscription's
+`verify_token_key_version` is read from the row and selects the
+decryption key, enabling key rotation without downtime. `safeEqual`
+provides timing-safe comparison for the incoming verify token.
 
 ### F14 / F15 — atomic claims
 
@@ -470,13 +701,6 @@ the reconciliation staleness threshold is
   (`SCHEDULED | RESERVED | RETRY → IN_PROGRESS`), returns `true` iff
   exactly one row was updated. See Phase 19e, defect #2.
 
-### Verification state
-
-The Phase 19d state recorded 208 passing tests across the six
-packages. The Phase 19e additions did not change the test count
-(`removeOnComplete: true` is a config change; the queue fix is not
-test-covered in this session).
-
 ---
 
 ## Milestone: Phase 19c complete — publication reconciliation
@@ -564,9 +788,8 @@ than as a single architectural jump:
   was published to the `contentplatform.dev` Page from a real
   `SCHEDULED` publication row.
 
-**Phase 19 is now complete.** The next major milestone is v1.3
-(`webhook_endpoints` and multi-page Meta support), which is outside
-the current baseline Phase 19 scope.
+**Phase 19 is now complete.** The next milestone is v1.3.1, which is
+documented at the top of this file.
 
 ---
 
@@ -678,7 +901,6 @@ materializes only `comment`, `reaction`, and `mention` changes.
 | Page username           | `contentplatform.dev`                                |
 | System User             | `contentplatform-bot` (`61594178114698`)             |
 | Subscribed fields       | `feed`, `mention`                                    |
-| Verify token            | `content-platform-verify-2026`                       |
 | Ngrok URL (recorded)    | `https://uncanny-reappoint-unaligned.ngrok-free.dev` |
 
 Database records created during the Phase 18a E2E test:
@@ -687,6 +909,14 @@ Database records created during the Phase 18a E2E test:
 | -------------------------- | -------------------------------------- |
 | `destinations.id`          | `51eb5e79-b6a5-4f51-86bb-23dd81e9167e` |
 | `webhook_subscriptions.id` | `2bc850b3-3e93-45d7-98cd-45e07a2daf00` |
+
+**v1.3.1 note.** After the v1.3.1 completion migration (`0018`), the
+`webhook_subscriptions.verify_token_*` and `last_rotated_at` columns no
+longer exist. The verify token is owned by `webhook_endpoints`. The
+`webhook_subscriptions.id` above will need a corresponding
+`webhook_endpoints.id` after migration; the token rotation and
+endpoint-upsert rules from `DATABASE_SCHEMA_CONTRACT.md` v1.3.1
+INVARIANT-17 and INVARIANT-18 apply.
 
 **Security note:** the Meta App Secret, the ngrok authtoken, and
 multiple Meta access tokens have appeared in the development chat
@@ -713,37 +943,45 @@ Six workspace packages:
 
 | Package                         | Purpose                                                                                                               | Tests   |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
-| `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                          | 22      |
+| `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                          | 28      |
 | `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                  | 37      |
 | `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 26      |
 | `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter | 56      |
-| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 102     |
-| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 8       |
-| **Total**                       |                                                                                                                       | **251** |
+| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 111     |
+| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 10      |
+| **Total**                       |                                                                                                                       | **268** |
 
-The 251-test verification is recorded with `TEST_DATABASE_URL` and
-`TEST_REDIS_URL` available. Without those, the DB- and Redis-backed
-tests skip.
+Test file count: 31 across the six packages. The 268-test verification
+is recorded with `TEST_DATABASE_URL` and `TEST_REDIS_URL` available.
+Without those, the DB- and Redis-backed tests skip.
 
-### Database schema
+### Database schema — v1.3.1 target state
 
-- **44 tables** implementing DB v1.2.
-- **15 migrations** (`0000` – `0014`), applied to Neon PostgreSQL.
+- **45 tables** implementing DB v1.3.1.
+- **19 migrations** (`0000` – `0018`), applied to Neon PostgreSQL.
 - `pgcrypto` extension registered in `0000`, never re-declared.
-- Partial index
-  `publications(external_post_id) WHERE ... IS NOT NULL`.
-- Partial unique index `provider_credentials_unique` with `COALESCE`.
+- `webhook_endpoints` created by `0015`.
+- `webhook_subscriptions.endpoint_id` NOT NULL after `0017`.
+- `webhook_subscriptions.verify_token_encrypted` and
+  `verify_token_key_version` dropped by `0017`.
+- `webhook_subscriptions.last_rotated_at` dropped by `0018`.
+- `external_interactions.provider` NOT NULL after `0017`.
+- `external_interactions_provider_external_id_uq` created by `0017`.
+- `provider_credentials` uses two partial unique indexes
+  (`provider_credentials_app_uq`,
+  `provider_credentials_destination_uq`) since `0018`.
 - Deferred FK `external_interactions.publication_id` →
-  `publications.id`.
+  `publications.id` (created by `0009`).
 
 ### Repositories implemented
 
-There are **15 repository classes** currently exported by
+There are **16 repository classes** currently exported by
 `packages/database/src/repositories/index.ts`.
 
 #### Webhook / outbox / destination
 
 - `OutboxRepository` — `FOR UPDATE SKIP LOCKED` two-step claim.
+- `WebhookEndpointsRepository` (v1.3.1).
 - `WebhookSubscriptionsRepository`.
 - `WebhookSubscriptionHealthRepository`.
 - `WebhookEventsRepository` — idempotent insert with
@@ -763,8 +1001,8 @@ There are **15 repository classes** currently exported by
 
 #### Credentials
 
-- `ProviderCredentialsRepository` — protected by the partial unique
-  index.
+- `ProviderCredentialsRepository` — protected by the two partial
+  unique indexes.
 
 #### Interaction response lifecycle
 
@@ -776,6 +1014,17 @@ There are **15 repository classes** currently exported by
 
 All repository integration tests with a database dependency run
 against Neon PostgreSQL when `TEST_DATABASE_URL` is configured.
+
+**Wiring gap.** `WebhookSubscriptionHealthRepository` and
+`InteractionModerationActionsRepository` are **not yet wired into
+`apps/worker/src/index.ts`**. This means:
+
+- `webhook_subscription_health` rows are not written by the worker.
+- Interaction moderation decisions are not persisted to
+  `interaction_moderation_actions`.
+
+Both are targeted fixes; the repository implementations exist and are
+tested in isolation.
 
 ### Platform primitives
 
@@ -824,13 +1073,16 @@ against Neon PostgreSQL when `TEST_DATABASE_URL` is configured.
 - `PublicationSchedulerWorker` — polling wrapper around the scheduler
   service.
 - `InteractionResponseSchedulerService` — SCHEDULED and stale
-  IN_PROGRESS interaction response orchestration.
+  IN_PROGRESS/UNKNOWN interaction response orchestration.
 - `InteractionResponseSchedulerWorker` — polling wrapper.
 - `MetaCredentialService` — credential store, rotation,
   invalidation, validation, and health checks.
 - `MetaErrorMapper` — Graph API error categorization.
 - `CredentialEncryptionProvider` — AES-256-GCM with AAD binding and
   key rotation.
+- `WebhookTokenEncryptionProvider` — wraps the credential provider
+  with the webhook-specific AAD contexts (legacy destination AAD and
+  target endpoint AAD).
 
 ### Webhook inbound pipeline --- COMPLETE
 
@@ -855,19 +1107,26 @@ Meta POST (HTTPS)
   → InteractionResponseService
 ```
 
-The `GET /api/v1/webhooks/meta` handshake is also implemented:
+The `GET /api/v1/webhooks/meta` handshake is implemented with dual-read
+semantics:
 
 1. `hub.mode` must be `subscribe`; `hub.verify_token` and
    `hub.challenge` are required.
-2. All active META webhook subscriptions are checked.
-3. `verify_token_encrypted` is decrypted using
-   `WEBHOOK_TOKEN_ENCRYPTION_KEY`.
-4. AAD is `META:${destination_id}`.
-5. Ciphertext format is `v1:base64(iv ‖ ciphertext ‖ tag)` using
+2. **Endpoint-first path:** all `webhook_endpoints` rows where
+   `provider = 'META' AND status = 'ACTIVE'` are loaded and decrypted
+   with AAD `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`.
+3. **Subscription fallback:** all `webhook_subscriptions` rows where
+   `provider = 'META' AND status = 'ACTIVE'` are loaded and decrypted
+   with AAD `META:WEBHOOK_VERIFY_TOKEN:<destination_id>`.
+4. Ciphertext format is `v1:base64(iv ‖ ciphertext ‖ tag)` using
    AES-256-GCM.
-6. On match, `last_verified_at` is updated and `hub.challenge` is
-   returned as plain text.
-7. On mismatch, HTTP 403 is returned.
+5. On match, `last_verified_at` is updated on the matched record and
+   `hub.challenge` is returned as plain text.
+6. On mismatch, HTTP 403 is returned.
+
+After the `0018` migration, the endpoint path is the only remaining
+path in the schema; the subscription-scoped AAD remains valid only for
+the migration window.
 
 ### Outbound publication pipeline --- COMPLETE, VERIFIED
 
@@ -940,10 +1199,31 @@ path.
 - `WebhookRespondReconcileWorker` — `webhook.respond.reconcile`.
 - `ContentPublishWorker` — `content.publish`.
 - `PublicationReconcileWorker` — `publication.reconcile`.
-- Graceful shutdown in dependency order:
-  `publicationSchedulerWorker.stop() → publication.reconcile →
-content.publish → webhook.respond.reconcile → webhook.respond →
-webhook.process → dispatcher → queue → db`.
+- `SystemRebuildWorker` — `system.rebuild`.
+- `SystemOutboxCleanupWorker` — `system.outbox.cleanup`.
+- `SystemOutboxCleanupSchedulerWorker` — hourly enqueue of cleanup
+  jobs.
+- `InteractionResponseSchedulerWorker` — periodic polling of
+  `SCHEDULED` and stale `IN_PROGRESS`/`UNKNOWN` responses.
+- `NotificationService`, `SystemLogService`, `AlertingService`.
+- `MetaCredentialService` (via `buildMetaCredentialService`).
+- `RedisMetaRateLimiter`.
+- `MetaPublisherAdapter` and `MetaInteractionAdapter` (via
+  `MetaGraphBridge`).
+- Graceful shutdown in dependency order.
+
+Worker boot log (verified 2026-10-05):
+
+```text
+[worker] interaction response: 0 rules, 0 templates
+[worker] rate limits: publish=10/h/dest, engagement=30/h/dest
+[worker] DB-backed Meta credentials available
+[worker] started
+[system.outbox.cleanup.schedule] started (interval=3600000ms)
+[interaction-response.schedule] scheduler started (interval=30000ms)
+[publication.schedule] scheduler started (interval=30000ms)
+[outbox] dispatcher started
+```
 
 ### `apps/api` --- routes
 
@@ -990,19 +1270,70 @@ future environments.
 - `docs/architecture/domain-model.md`
 - `docs/architecture/data-model.md`
 - `docs/architecture/TECHNICAL_SPECIFICATION.md`
-- `docs/architecture/DATABASE_SCHEMA_CONTRACT.md`
+- `docs/architecture/DATABASE_SCHEMA_CONTRACT.md` — **v1.3.1 final**
 - `docs/architecture/LOGICAL_MODEL_SPECIFICATION.md` — status
   unconfirmed
+- `docs/architecture/META_INTEGRATION_SPECIFICATION.md` — v1.4,
+  partially superseded by v1.3.1
 - `docs/conventions/`
 - `docs/operations/README.md`
 - `docs/operations/local-development.md`
 - `docs/operations/meta-app-setup.md`
+- `docs/planning/v1-3-development-plan-2026-10-04.md` — superseded
+  by the v1.3.1 contract
+- `docs/audit/baseline-audit-2026-09-20.md`
+- `docs/audit/sprint-audit-2026-10-03.md`
+- `docs/audit/v1-3-readiness-audit-2026-10-04.md`
 
 ---
 
 ## Pending items
 
-### 1. Meta credential fallback removal — v1.3 scope
+### 1. `WebhookSubscriptionHealth` and `InteractionModerationActions` wiring
+
+Both repositories exist and are tested in isolation but are **not yet
+wired into `apps/worker/src/index.ts`**:
+
+- `WebhookSubscriptionHealthRepository` — the
+  `webhook_subscription_health` table is not written by the worker.
+  The v1.2 F11 fix ("storage now, use later") currently has no
+  writer, so "storage" is incomplete.
+- `InteractionModerationActionsRepository` — interaction moderation
+  decisions are not persisted to `interaction_moderation_actions`.
+  The `WebhookRespondService` performs moderation but does not write
+  the decision.
+
+Both are targeted fixes. The repository implementations are correct
+and tested; the wiring must be added to the worker bootstrap and the
+relevant services.
+
+### 2. TypeScript downgrade for ESLint compatibility
+
+`pnpm lint` fails at module load because the project pins
+TypeScript `7.0.2` (in `pnpm-workspace.yaml`) and
+`typescript-eslint@8.70.0` does not yet support the TS 7 compiler
+API. The failure is:
+
+```text
+typescript-eslint does not support TS 7.0.
+Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0
+```
+
+Tracked upstream at
+[typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940).
+
+The CI workflow (`.github/workflows/ci.yml`) intentionally does
+not run the lint step for this reason. The other checks —
+`pnpm format:check`, `pnpm typecheck`, `pnpm test` — remain in CI
+and protect the `main` branch.
+
+**Recommended resolution:** downgrade TypeScript to 6.x. The
+language is identical; TS 7 is a compiler rewrite. All tooling
+(typescript-eslint, tsx, drizzle-kit, tsc) is compatible with
+both. The downgrade touches `package.json`, `pnpm-workspace.yaml`,
+`pnpm-lock.yaml`, and `.github/workflows/ci.yml`.
+
+### 3. Meta credential fallback removal — v1.3 F5a
 
 `MetaCredentialService` is wired into the worker. The
 `META_PAGE_ACCESS_TOKEN` environment variable remains as a
@@ -1017,14 +1348,7 @@ error-category preservation. No cache and no Pub/Sub — the
 single-worker topology and the rate-limited API call pattern make
 them unnecessary at this stage.
 
-### 2. Secret rotation (unchanged)
-
-See "Meta App configuration" section for the full rotation list.
-The Meta App Secret, the ngrok authtoken, the System User token,
-and the derived Page Access Token all appeared in the development
-chat and must be rotated before external collaboration.
-
-### 3. `destinations.trust_level`
+### 4. `destinations.trust_level`
 
 The current database schema does not contain a `trust_level` column.
 The interaction policy path therefore uses its configured/default
@@ -1032,14 +1356,14 @@ trust level as an application value. A dedicated database column
 should only be introduced when the reputation subsystem defines the
 authoritative source.
 
-### 4. `LOGICAL_MODEL_SPECIFICATION.md`
+### 5. `LOGICAL_MODEL_SPECIFICATION.md` status
 
 The documentation references
 `docs/architecture/LOGICAL_MODEL_SPECIFICATION.md`. Its presence and
 version/status should be explicitly verified before treating the
 logical model as confirmed.
 
-### 5. Secret rotation
+### 6. Secret rotation
 
 The Meta App Secret, the ngrok authtoken, the System User token, and
 the derived Page Access Token have all appeared in the development
@@ -1047,85 +1371,83 @@ chat. Rotate every one of them before external collaboration or
 broader credential distribution. See the "Security note" in the Meta
 App configuration section.
 
-### 6. Ngrok URL is ephemeral
+### 7. Ngrok URL is ephemeral
 
 The recorded free ngrok URL changes when the tunnel is restarted. The
 Meta Webhook callback configuration therefore has to be updated after
 a restart. For stable long-running development, use a fixed public
 HTTPS endpoint or a static ngrok domain.
 
+### 8. Documentation drift reconciliation
+
+The v1.3.1 contract explicitly supersedes statements in
+`TECHNICAL_SPECIFICATION.md` v0.9.0 (§136) and
+`META_INTEGRATION_SPECIFICATION.md` v1.4 (§5, §48). Additional drift
+identified by follow-up audits affects:
+
+- `META_INTEGRATION_SPECIFICATION.md` §9.8 (handshake description),
+  §36 Layer 2 (natural key), §52 (baseline declaration), §2.2
+  (version history).
+- `TECHNICAL_SPECIFICATION.md` §84 (44-table inventory), §84.7
+  (`webhook_subscriptions` columns), §84.11 (natural key), §84.12
+  (`provider_credentials` COALESCE), §140.2 (handshake), §145
+  (invariant 15), §147 (source-of-truth hierarchy).
+- `docs/architecture/data-model.md`, `docs/architecture/domain-model.md`,
+  `docs/architecture/README.md`, `docs/architecture/system-overview.md`
+  (44→45 tables, missing `webhook_endpoints`, v1.2 natural key).
+- `docs/adr/ADR-002-outbox-pattern.md` (BullMQ dedup overstatement,
+  §5.43 → §5.45), `docs/adr/ADR-005-health-separation.md` (§5.44 →
+  §5.36).
+- `docs/operations/local-development.md` (migration count, test count,
+  legacy encryption key format).
+
+The minimal reconciliation is a "v1.3.1 compatibility note" at the top
+of each affected document that lists the superseded statements and
+points to the corresponding v1.3.1 sections. The full §-level revision
+can proceed in parallel or later.
+
 ---
-
-### 7. ESLint blocked by TypeScript 7 pin
-
-`pnpm lint` fails at module load because the project pins
-TypeScript `7.0.2` (in `pnpm-workspace.yaml`) and
-`typescript-eslint@8.70.0` does not yet support the TS 7 compiler
-API. The failure is:
-
-```
-typescript-eslint does not support TS 7.0.
-Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0
-```
-
-Tracked upstream at
-[typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940).
-
-The CI workflow (`.github/workflows/ci.yml`) intentionally does
-not run the lint step for this reason. The other checks —
-`pnpm format:check`, `pnpm typecheck`, `pnpm test` — remain in CI
-and protect the `main` branch.
-
-Resolution options when revisiting:
-
-- Downgrade TypeScript to 6.x. The language is identical; TS 7 is
-  a compiler rewrite. All tooling (typescript-eslint, tsx,
-  drizzle-kit, tsc) is compatible with both.
-- Wait for a typescript-eslint release that supports TS 7, then
-  re-enable the lint step in CI.
-
-### 8. v1.3 readiness — contract revision pending
-
-The v1.3 readiness audit recorded CONDITIONAL PASS. The plan is
-committed at `docs/planning/v1-3-development-plan-2026-10-04.md`.
-
-The single precondition before any v1.3 code can land is the
-`DATABASE_SCHEMA_CONTRACT.md` v1.2 → v1.3 revision. The contract is
-the source of truth for the schema; the migration files are
-generated from it. See architectural invariant #15.
-
-The v1.3 plan assumes the contract revision lands first, then the
-`0015`–`0017` migrations, in the order defined in the plan §6.1.
 
 ## Next steps
 
-The baseline Phase 19 (Meta publisher adapter and reconciliation) is
-complete. The next major milestone in the baseline roadmap is:
+### Primary: two targeted wiring fixes
 
-### v1.3 --- `webhook_endpoints` and multi-page Meta support
+1. Wire `WebhookSubscriptionHealthRepository` into
+   `WebhookProcessService` (or `WebhookEventsRepository`'s
+   successful-processing path) so that `webhook_subscription_health`
+   rows are written on delivery outcomes.
+2. Wire `InteractionModerationActionsRepository` into
+   `WebhookRespondService` (or `InteractionResponseService`) so that
+   moderation decisions are persisted to
+   `interaction_moderation_actions`.
 
-The current `webhook_subscriptions` table duplicates the App-level
-verify token per subscription. In v1.3 this is refactored into a new
-`webhook_endpoints` table that owns the App-level verify token, and
-`webhook_subscriptions` references the endpoint instead of duplicating
-the token. This is an **aggregate boundary** change, not a table
-addition: it affects the verification flow, the credential rotation
-flow, the admin configuration UI, the audit trail, the repository
-layer, the service layer, and the migration layer.
+Both fixes are small, isolated, and testable.
 
-See `DATABASE_SCHEMA_CONTRACT.md` v1.2, deferred decision D-013.
+### Secondary: TypeScript downgrade
 
-### Secondary items (not blocking v1.3)
+Downgrade TypeScript from `7.0.2` to `6.x` in `package.json` and
+`pnpm-workspace.yaml`, regenerate `pnpm-lock.yaml`, re-enable the
+`pnpm lint` step in `.github/workflows/ci.yml`, and close pending item
+#2.
 
-The pending items above are non-blocking. They can be addressed in
-any order, individually or as part of a broader hardening pass:
+### Tertiary: documentation drift reconciliation
 
-- The credential-path migration (`META_PAGE_ACCESS_TOKEN` →
-  `MetaCredentialService`) is the highest-value pending item because
-  it eliminates the last environment-based secret on the worker side.
-- The interaction-response configuration (`system_config` load) is
-  the second-highest-value because it activates the policy engine
-  beyond its current fail-closed default.
+Apply the "v1.3.1 compatibility notes" to the affected higher-level
+documents (pending item #8). This unblocks the v1.3.2 development plan
+and removes the ambiguity about which document is authoritative for the
+v1.3.1 schema.
+
+### Quarterly: production Path A
+
+If a populated v1.2 production database ever needs to migrate to
+v1.3.1, the full four-phase protocol from `DATABASE_SCHEMA_CONTRACT.md`
+v1.3.1 §20 must be implemented: Compatibility Bridge deployment, Hard
+Gate #1 (SERIALIZABLE data validation + concurrent index catalog
+validation + preservation evidence), Hard Gate #2, `0018 CONTRACT`
+completion, partial-0016 recovery contract, immutable pre-migration
+preservation baseline, and canonical-JSON preservation digest per
+§2.8. The current migration chain (`0015`–`0017` plus `0018`) reaches
+the same target state but does not implement the governance layer.
 
 ---
 
@@ -1167,18 +1489,53 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
     denial.
 15. Every schema change must land in the `DATABASE_SCHEMA_CONTRACT`
     before the migration is written. The contract is the source of
-    truth; migrations are generated from it. This gate is why the
-    v1.3 workstream cannot start until the contract's v1.3 revision
-    is merged.
+    truth; migrations are generated from it. The v1.3.1 contract is
+    the current level-3 baseline.
+
+### Additional invariants introduced by the v1.3.1 contract
+
+16. The App-level webhook verify token is owned by
+    `webhook_endpoints`. No per-subscription duplication.
+17. The target-state authoritative verify-token AAD is
+    `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`. The legacy
+    destination-scoped AAD is migration-window-only.
+18. The natural external identity of `external_interactions` is
+    `(provider, external_interaction_id)`, enforced by a
+    **UNIQUE INDEX** (`external_interactions_provider_external_id_uq`).
+19. `interaction_responses.destination_id` is `NOT NULL` with
+    `ON DELETE RESTRICT`.
+20. `webhook_subscriptions.fields` is non-empty
+    (`CHECK (cardinality(fields) > 0)`).
+21. Exactly one Meta App per deployment.
+22. Encryption keys are versioned; the legacy single-key model is
+    compatibility-only.
+23. Path A (upgrade) and Path B (greenfield) are distinct,
+    non-mergeable migration flows.
+24. The `0016` migration fence applies to all writers of
+    `external_interactions`, `webhook_subscriptions`, and
+    `webhook_endpoints`.
+25. Historical durable business data is preserved byte-for-byte
+    except for the transformations explicitly allowed in the contract.
+26. Preservation evidence is verified, not merely asserted.
+27. The authoritative outbox idempotency anchor is
+    `outbox_jobs.job_id UNIQUE`. BullMQ `jobId` deduplication is a
+    mitigation, not a guarantee.
+28. The `0016` migration executes on a single dedicated session.
+29. A `0016` failure after Step 1 leaves the deployment in the
+    partial-0016 state, recoverable by re-running `0016` using the
+    existing immutable baseline, never a recomputed one.
+30. Multi-user access control within a shared deployment scope; no
+    tenant isolation.
 
 ---
 
 ## Known patterns and traps
 
-These are lessons learned during Phases 14–19e. They are captured
-here so the next session does not re-encounter them.
+These are lessons learned during Phases 14–19e and v1.3.1
+finalization. They are captured here so the next session does not
+re-encounter them.
 
-### describe.skipIf(!TEST_DB_URL) silently skips DB tests
+### `describe.skipIf(!TEST_DB_URL)` silently skips DB tests
 
 The DB- and Redis-backed integration tests use the
 `describe.skipIf(!TEST_DB_URL)` pattern. When the environment
@@ -1354,6 +1711,49 @@ export TEST_DATABASE_URL="$(grep '^TEST_DATABASE_URL=' .env | cut -d= -f2-)"
 
 and export `TEST_REDIS_URL` similarly.
 
+### `drizzle-kit migrate` does not read `.env`
+
+The `drizzle.config.ts` reads `process.env.DATABASE_URL`. The `pnpm
+db:migrate` script does not load `.env` automatically. Export the
+variable first:
+
+```bash
+export DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"')"
+pnpm db:migrate
+```
+
+Or run inline:
+
+```bash
+DATABASE_URL="$(grep '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"')" pnpm db:migrate
+```
+
+Or via the workspace-local drizzle-kit binary from `packages/database`:
+
+```bash
+cd packages/database
+DATABASE_URL="$(grep '^DATABASE_URL=' ../../.env | cut -d= -f2- | tr -d '\"')" pnpm exec drizzle-kit migrate
+```
+
+### Never echo environment variable values
+
+`DATABASE_URL`, `META_APP_SECRET`, `WEBHOOK_TOKEN_ENCRYPTION_KEY`, and
+`META_CREDENTIAL_ENCRYPTION_KEYS` must never be echoed to the console,
+even partially. To verify a variable is set:
+
+```bash
+[ -n "$DATABASE_URL" ] && echo "DATABASE_URL: set" || echo "MISSING"
+```
+
+To check length only:
+
+```bash
+echo "DATABASE_URL length: ${#DATABASE_URL}"
+```
+
+Do not `echo "$DATABASE_URL"`, do not print a prefix, do not include a
+variable value in commit messages or debug output.
+
 ### Neon direct vs pooled connections
 
 `drizzle-kit migrate` uses prepared statements and therefore must use
@@ -1474,33 +1874,6 @@ The `IN_PROGRESS` transition must be a single atomic claim
 (`claimForPublishing`) with a status predicate in the `WHERE` clause.
 Two separate unguarded updates are not sufficient.
 
----
-
-### Commitlint type list is narrower than the Conventional Commits standard
-
-The project's `commitlint.config.js` uses a reduced `type-enum`:
-
-```text
-feat fix refactor docs test perf build ci chore revert
-```
-
-Two types present in the standard Conventional Commits spec are
-**absent**: `style` and `doc`. A commit whose subject starts with
-`style:` or `doc(...):` is rejected by the hook, even though both
-forms are valid under the broader spec.
-
-When a change is purely formatting (whitespace, prettier output, markdown
-table alignment), the correct type is `docs(<scope>):` for documentation
-files, or `chore:` for code files. For example:
-
-```text
-docs(audit): apply prettier to baseline audit banner
-```
-
-Before suggesting any commit message, check `commitlint.config.js` for
-the current type list. The toolchain evolves; the list is the source of
-truth.
-
 ### Drizzle snapshot chain breaks with seed-only migrations
 
 Every `_journal.json` entry must have a matching
@@ -1525,17 +1898,58 @@ a new `NNNN_*.sql` file, the snapshot chain is not consistent with
 the Drizzle schema definitions, and the new files must be removed
 before continuing.
 
+### GitHub Actions runner allocation can fail during incidents
+
+The GitHub-hosted runner pool can be temporarily unavailable during
+GitHub-side incidents. The symptom is a workflow run that stays in
+`Queued` for an unusually long time and then fails with:
+
+```text
+Internal server error. Correlation ID: ...
+The job was not acquired by Runner of type hosted even after multiple attempts
+```
+
+This is **not** a repository defect. The job never started. Check
+<https://www.githubstatus.com/> for an active incident. When the
+incident is resolved, re-run the workflow from the run page.
+
+Do not push additional commits to work around the incident — that
+only adds more queued runs.
+
+### TypeScript 7 + ESLint compatibility
+
+The project pins TypeScript 7.0.2. `typescript-eslint@8.70.0` does not
+yet support the TS 7 compiler API. `pnpm lint` fails at module load:
+
+```text
+typescript-eslint does not support TS 7.0.
+```
+
+The CI workflow intentionally excludes the lint step. See pending
+item #2 for the recommended resolution (downgrade to TS 6.x).
+
 ---
 
 ## Source-of-truth hierarchy
 
 ```text
 1. Domain and architecture contracts
-2. DB v1 Logical Model Specification
-3. DATABASE_SCHEMA_CONTRACT.md
+2. DB v1 Logical Model Specification v1.0
+3. DATABASE_SCHEMA_CONTRACT.md v1.3.1   ← FINAL
 4. Drizzle schema implementation
 5. Generated PostgreSQL migrations
 ```
 
 Any change to the physical schema requires revising the higher-level
-contract first.
+contract first. The v1.3.1 contract is the current level-3 baseline
+and is **final**.
+
+The v1.3.1 contract explicitly supersedes statements in:
+
+- `TECHNICAL_SPECIFICATION.md v0.9.0 §136`
+- `META_INTEGRATION_SPECIFICATION.md v1.4 §5`
+- `META_INTEGRATION_SPECIFICATION.md v1.4 §48`
+
+Additional drift in the higher-level documents (identified by
+follow-up audits) must be reconciled via compatibility notes or
+§-level revisions before the v1.3.2 development plan is finalized.

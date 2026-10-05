@@ -127,6 +127,13 @@
       "when": 1791133520637,
       "tag": "0017_webhook_endpoints_contract",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791229801151,
+      "tag": "0018_webhook_endpoints_contract_completion",
+      "breakpoints": true
     }
   ]
 }

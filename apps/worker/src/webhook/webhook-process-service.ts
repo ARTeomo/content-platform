@@ -6,6 +6,8 @@ import type {
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
+  WebhookSubscriptionHealthRepository,
+  WebhookSubscriptionsRepository,
 } from '@content-platform/database';
 import type { InteractionType } from '@content-platform/interaction-response';
 import type { InteractionResponseService } from '../interaction-response/interaction-response-service.js';
@@ -32,6 +34,19 @@ export interface WebhookProcessServiceDeps {
   interactionResponseService: InteractionResponseService;
   interactionResponseConfig: InteractionResponseConfig;
   templates: TemplateMap;
+  /**
+   * Resolves the subscription that owns the (destination_id, provider)
+   * pair. Used to update webhook_subscription_health after processing.
+   *
+   * @see D-009 (storage now, use later)
+   */
+  subscriptionsRepo: WebhookSubscriptionsRepository;
+  /**
+   * Records processing success or failure on the subscription health
+   * row. The write happens in the same transaction as the event status
+   * transition, so the health row cannot drift from the event outcome.
+   */
+  subscriptionHealthRepo: WebhookSubscriptionHealthRepository;
   logger?: Pick<Console, 'info' | 'warn' | 'error'>;
 }
 
@@ -94,6 +109,8 @@ export class WebhookProcessService {
       await this.failDelivery(
         delivery.id,
         event.id,
+        null,
+        event.provider,
         'UNKNOWN_DESTINATION',
         'Event has no destination id',
       );
@@ -108,6 +125,8 @@ export class WebhookProcessService {
       await this.failDelivery(
         delivery.id,
         event.id,
+        destinationId,
+        event.provider,
         'UNKNOWN_DESTINATION',
         `Destination ${destinationId} not found`,
       );
@@ -128,6 +147,8 @@ export class WebhookProcessService {
       await this.failDelivery(
         delivery.id,
         event.id,
+        destinationId,
+        event.provider,
         'PAYLOAD_MALFORMED',
         'Envelope has no entry array',
       );
@@ -224,14 +245,35 @@ export class WebhookProcessService {
     const finishedAt = new Date();
 
     if (errors.length > 0) {
-      await this.failDelivery(delivery.id, event.id, 'PROCESSING_ERROR', errors.join('; '));
+      await this.failDelivery(
+        delivery.id,
+        event.id,
+        destinationId,
+        event.provider,
+        'PROCESSING_ERROR',
+        errors.join('; '),
+      );
       this.log.warn(`[webhook.process] event ${event.id} failed: ${errors.join('; ')}`);
       return { status: 'FAILED', error: errors.join('; ') };
     }
 
+    const { subscriptionsRepo, subscriptionHealthRepo } = this.deps;
+
     await txManager.run(async (tx) => {
       await eventsRepo.markProcessed(tx, event.id, finishedAt);
       await deliveriesRepo.finishSuccess(tx, delivery.id, finishedAt);
+
+      // v1.3 F11 / D-009: record the operational success on the
+      // subscription health row. The subscription is resolved by
+      // (destination_id, provider); if no subscription exists, the
+      // health row is not touched (no FK target).
+      const subscription = await subscriptionsRepo.findByDestinationAndProvider(
+        destinationId,
+        event.provider,
+      );
+      if (subscription) {
+        await subscriptionHealthRepo.recordSuccess(tx, subscription.id, finishedAt);
+      }
     });
 
     this.log.info(
@@ -243,14 +285,31 @@ export class WebhookProcessService {
   private async failDelivery(
     deliveryId: string,
     eventId: string,
+    destinationId: string | null,
+    provider: string,
     category: string,
     message: string,
   ): Promise<void> {
-    const { txManager, eventsRepo, deliveriesRepo } = this.deps;
+    const { txManager, eventsRepo, deliveriesRepo, subscriptionsRepo, subscriptionHealthRepo } =
+      this.deps;
     const at = new Date();
     await txManager.run(async (tx) => {
       await eventsRepo.markFailed(tx, eventId);
       await deliveriesRepo.finishFailure(tx, deliveryId, at, 'FAILED', category, message);
+
+      // v1.3 F11 / D-009: record the operational failure on the
+      // subscription health row. The destination_id may be null when
+      // the event has no resolved destination — in that case no
+      // subscription can be resolved and the health row is untouched.
+      if (destinationId !== null) {
+        const subscription = await subscriptionsRepo.findByDestinationAndProvider(
+          destinationId,
+          provider,
+        );
+        if (subscription) {
+          await subscriptionHealthRepo.recordFailure(tx, subscription.id, at, category, message);
+        }
+      }
     });
   }
 }

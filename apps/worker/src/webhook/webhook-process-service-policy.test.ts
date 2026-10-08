@@ -8,6 +8,8 @@ import type {
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
+  WebhookSubscriptionHealthRepository,
+  WebhookSubscriptionsRepository,
 } from '@content-platform/database';
 import type { InteractionResponseService } from '../interaction-response/interaction-response-service.js';
 import type {
@@ -227,6 +229,17 @@ function build(args: {
     },
   } as unknown as ChangeExtractorRegistry;
 
+  const subscriptionsRepo = {
+    async findByDestinationAndProvider() {
+      return undefined;
+    },
+  } as unknown as WebhookSubscriptionsRepository;
+
+  const subscriptionHealthRepo = {
+    async recordSuccess() {},
+    async recordFailure() {},
+  } as unknown as WebhookSubscriptionHealthRepository;
+
   const service = new WebhookProcessService({
     txManager: makeTxManager(),
     eventsRepo,
@@ -243,6 +256,8 @@ function build(args: {
       minIntervalSeconds: 30,
     },
     templates: {},
+    subscriptionsRepo,
+    subscriptionHealthRepo,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   });
 

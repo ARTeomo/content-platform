@@ -8,6 +8,8 @@ import {
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
+  WebhookSubscriptionHealthRepository,
+  WebhookSubscriptionsRepository,
   type DatabaseClient,
 } from '@content-platform/database';
 import type { InteractionResponseService } from '../interaction-response/interaction-response-service.js';
@@ -48,6 +50,8 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
     const publicationsRepo = new PublicationsRepository(client.db);
     const destinationsRepo = new DestinationsRepository(client.db);
     const responsesRepo = new InteractionResponsesRepository(client.db);
+    const subscriptionsRepo = new WebhookSubscriptionsRepository(client.db);
+    const subscriptionHealthRepo = new WebhookSubscriptionHealthRepository(client.db);
 
     const registry = new ChangeExtractorRegistry()
       .register(new FeedChangeExtractor())
@@ -77,6 +81,8 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
       interactionResponseService,
       interactionResponseConfig: DEFAULT_CONFIG,
       templates: DEFAULT_TEMPLATES,
+      subscriptionsRepo,
+      subscriptionHealthRepo,
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     });
 
@@ -243,7 +249,132 @@ describe.skipIf(!TEST_DB_URL)('WebhookProcessService', () => {
     expect(outcome.status).toBe('SKIPPED');
     expect(decideSpy).not.toHaveBeenCalled();
   });
+
+  // ---------------------------------------------------------------------
+  // v1.3 F11 / D-009 — webhook_subscription_health writes
+  // ---------------------------------------------------------------------
+
+  it('records a successful delivery on webhook_subscription_health', async () => {
+    const subscriptionId = await ensureSubscription(client, destinationId);
+
+    // Reset the health record to a clean state so the assertions are
+    // independent of any prior test run.
+    await client.sql`DELETE FROM webhook_subscription_health WHERE subscription_id = ${subscriptionId}`;
+    await client.sql`
+      INSERT INTO webhook_subscription_health (subscription_id)
+      VALUES (${subscriptionId})
+    `;
+
+    const [event] = await client.sql<{ id: string }[]>`
+      INSERT INTO webhook_events (
+        provider, destination_id, object_type, external_object_id,
+        field, idempotency_key, raw_payload, raw_body_hash, signature_verified
+      ) VALUES (
+        'META', ${destinationId}, 'page', 'page-1',
+        'feed', 'hash-health-success', ${JSON.stringify({
+          object: 'page',
+          entry: [
+            {
+              id: 'page-1',
+              time: 1_700_000_000,
+              changes: [
+                {
+                  field: 'feed',
+                  value: {
+                    item: 'comment',
+                    verb: 'add',
+                    comment_id: 'health-comment-1',
+                    post_id: 'health-post-1',
+                    parent_id: null,
+                    from: { id: 'user-1', name: 'Alice' },
+                    message: 'Nice!',
+                    created_time: 1_700_000_000,
+                  },
+                },
+              ],
+            },
+          ],
+        })}::jsonb, 'hash-health-success', true
+      ) RETURNING id
+    `;
+
+    const outcome = await service.processEvent(event!.id);
+    expect(outcome.status).toBe('PROCESSED');
+
+    const [health] = await client.sql<
+      {
+        consecutive_successes: number;
+        consecutive_failures: number;
+        events_today: number;
+        last_success_at: Date | null;
+        last_failure_at: Date | null;
+      }[]
+    >`
+      SELECT consecutive_successes, consecutive_failures, events_today,
+             last_success_at, last_failure_at
+      FROM webhook_subscription_health
+      WHERE subscription_id = ${subscriptionId}
+    `;
+
+    expect(health!.consecutive_successes).toBe(1);
+    expect(health!.consecutive_failures).toBe(0);
+    expect(health!.events_today).toBe(1);
+    expect(health!.last_success_at).not.toBeNull();
+    expect(health!.last_failure_at).toBeNull();
+  });
+
+  it('records a failed delivery on webhook_subscription_health', async () => {
+    const subscriptionId = await ensureSubscription(client, destinationId);
+
+    await client.sql`DELETE FROM webhook_subscription_health WHERE subscription_id = ${subscriptionId}`;
+    await client.sql`
+      INSERT INTO webhook_subscription_health (subscription_id)
+      VALUES (${subscriptionId})
+    `;
+
+    // Malformed envelope: destination exists, so the failure is
+    // PAYLOAD_MALFORMED (not UNKNOWN_DESTINATION). This exercises the
+    // failDelivery path that resolves the subscription and records
+    // the failure.
+    const [event] = await client.sql<{ id: string }[]>`
+      INSERT INTO webhook_events (
+        provider, destination_id, object_type, external_object_id,
+        field, idempotency_key, raw_payload, raw_body_hash, signature_verified
+      ) VALUES (
+        'META', ${destinationId}, 'page', 'page-1',
+        'feed', 'hash-health-failure',
+        '{"object":"page","entry":"not-an-array"}'::jsonb,
+        'hash-health-failure', true
+      ) RETURNING id
+    `;
+
+    const outcome = await service.processEvent(event!.id);
+    expect(outcome.status).toBe('FAILED');
+
+    const [health] = await client.sql<
+      {
+        consecutive_successes: number;
+        consecutive_failures: number;
+        last_error_category: string | null;
+        last_failure_at: Date | null;
+      }[]
+    >`
+      SELECT consecutive_successes, consecutive_failures,
+             last_error_category, last_failure_at
+      FROM webhook_subscription_health
+      WHERE subscription_id = ${subscriptionId}
+    `;
+
+    expect(health!.consecutive_failures).toBe(1);
+    expect(health!.consecutive_successes).toBe(0);
+    expect(health!.last_error_category).toBe('PAYLOAD_MALFORMED');
+    expect(health!.last_failure_at).not.toBeNull();
+  });
 });
+
+// ---------------------------------------------------------------------------
+// Scaffolding
+// ---------------------------------------------------------------------------
 
 async function ensureDestination(client: DatabaseClient, marker: string): Promise<string> {
   const existing = await client.sql<{ id: string }[]>`
@@ -258,4 +389,63 @@ async function ensureDestination(client: DatabaseClient, marker: string): Promis
   `;
   if (!destination) throw new Error('scaffolding: destination insert failed');
   return destination.id;
+}
+
+/**
+ * Ensure a webhook_endpoints row and a webhook_subscriptions row exist
+ * for the given destination, plus the 1:1 webhook_subscription_health
+ * companion. Idempotent.
+ *
+ * Required because webhook_subscriptions.endpoint_id is NOT NULL after
+ * migration 0017; a subscription cannot be created without an endpoint.
+ */
+async function ensureSubscription(client: DatabaseClient, destinationId: string): Promise<string> {
+  // 1. Ensure endpoint
+  const existingEndpoint = await client.sql<{ id: string }[]>`
+    SELECT id FROM webhook_endpoints
+    WHERE provider = 'META' AND name = 'test-webhook-process-endpoint'
+    LIMIT 1
+  `;
+
+  let endpointId: string;
+  if (existingEndpoint[0]) {
+    endpointId = existingEndpoint[0].id;
+  } else {
+    const [ep] = await client.sql<{ id: string }[]>`
+      INSERT INTO webhook_endpoints (
+        provider, name, verify_token_encrypted, verify_token_key_version, status
+      ) VALUES (
+        'META', 'test-webhook-process-endpoint', 'v1:AAAA', 1, 'ACTIVE'
+      )
+      RETURNING id
+    `;
+    if (!ep) throw new Error('scaffolding: webhook_endpoints insert failed');
+    endpointId = ep.id;
+  }
+
+  // 2. Ensure subscription
+  const existingSub = await client.sql<{ id: string }[]>`
+    SELECT id FROM webhook_subscriptions
+    WHERE destination_id = ${destinationId} AND provider = 'META'
+    LIMIT 1
+  `;
+  if (existingSub[0]) return existingSub[0].id;
+
+  const [sub] = await client.sql<{ id: string }[]>`
+    INSERT INTO webhook_subscriptions (
+      destination_id, endpoint_id, provider, fields, status
+    ) VALUES (
+      ${destinationId}, ${endpointId}, 'META', ARRAY['feed'], 'ACTIVE'
+    )
+    RETURNING id
+  `;
+  if (!sub) throw new Error('scaffolding: webhook_subscriptions insert failed');
+
+  // 3. Ensure health companion row
+  await client.sql`
+    INSERT INTO webhook_subscription_health (subscription_id)
+    VALUES (${sub.id})
+  `;
+
+  return sub.id;
 }

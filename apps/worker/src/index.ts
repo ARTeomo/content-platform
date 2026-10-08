@@ -15,6 +15,8 @@ import {
   TransactionManager,
   WebhookDeliveriesRepository,
   WebhookEventsRepository,
+  WebhookSubscriptionsRepository,
+  WebhookSubscriptionHealthRepository,
 } from '@content-platform/database';
 import {
   MetaInteractionAdapter,
@@ -101,6 +103,8 @@ async function main(): Promise<void> {
   const outboxRepo = new OutboxRepository(db.db);
   const eventsRepo = new WebhookEventsRepository(db.db);
   const deliveriesRepo = new WebhookDeliveriesRepository(db.db);
+  const subscriptionsRepo = new WebhookSubscriptionsRepository(db.db);
+  const subscriptionHealthRepo = new WebhookSubscriptionHealthRepository(db.db);
   const interactionsRepo = new ExternalInteractionsRepository(db.db);
   const publicationsRepo = new PublicationsRepository(db.db);
   const publicationAttemptsRepo = new PublicationAttemptsRepository(db.db);
@@ -205,6 +209,8 @@ async function main(): Promise<void> {
     interactionResponseService,
     interactionResponseConfig,
     templates,
+    subscriptionsRepo,
+    subscriptionHealthRepo,
   });
 
   const webhookProcessWorker = new WebhookProcessWorker({

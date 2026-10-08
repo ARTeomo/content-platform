@@ -5,7 +5,7 @@ packages:
 overrides:
   drizzle-orm: 0.45.2
   drizzle-kit: 0.31.10
-  typescript: 7.0.2
+  typescript: 5.9.3
 
 # Resolve optional native dependencies for multiple platforms so that
 # the same lockfile works on Windows (local development), Linux (CI),

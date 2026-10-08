@@ -29,14 +29,22 @@ import { destinations } from '../publication/destinations.js';
  * - `encryption_key_version` is stored per row so key rotation does not
  *   require a full-table rewrite in a single transaction.
  *
- * ## Unique business identity
+ * ## Unique business identity (v1.3.1)
  *
- * The uniqueness is on (provider, credential_type, scope, destination_id),
- * with COALESCE to make APP-scope rows (destination_id = NULL) collide
- * with each other for the same (provider, credential_type).
+ * Two partial unique indexes enforce the APP and DESTINATION scope
+ * rules directly, without a sentinel UUID:
  *
- * @see DATABASE_SCHEMA_CONTRACT.md §5.38
- * @see ADR-006 (encryption at rest — deferred to Phase 15 docs)
+ *   - provider_credentials_app_uq        (provider, credential_type)
+ *                                        WHERE scope = 'APP' AND destination_id IS NULL
+ *   - provider_credentials_destination_uq (provider, credential_type, destination_id)
+ *                                        WHERE scope = 'DESTINATION' AND destination_id IS NOT NULL
+ *
+ * This expresses the domain rule in the index predicate itself and
+ * avoids the collision risk of a sentinel UUID. It replaces the
+ * pre-v1.3.1 `provider_credentials_unique` COALESCE expression index,
+ * which was dropped by migration `0018`.
+ *
+ * @see DATABASE_SCHEMA_CONTRACT.md §5.40, §8.3
  */
 export const providerCredentials = pgTable(
   'provider_credentials',
@@ -59,12 +67,12 @@ export const providerCredentials = pgTable(
     updatedAt: updatedAtColumn(),
   },
   (table) => [
-    uniqueIndex('provider_credentials_unique').on(
-      table.provider,
-      table.credentialType,
-      table.scope,
-      sql`COALESCE(${table.destinationId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
-    ),
+    uniqueIndex('provider_credentials_app_uq')
+      .on(table.provider, table.credentialType)
+      .where(sql`${table.scope} = 'APP' AND ${table.destinationId} IS NULL`),
+    uniqueIndex('provider_credentials_destination_uq')
+      .on(table.provider, table.credentialType, table.destinationId)
+      .where(sql`${table.scope} = 'DESTINATION' AND ${table.destinationId} IS NOT NULL`),
     index('provider_credentials_status_idx').on(table.status),
     index('provider_credentials_expires_at_idx').on(table.expiresAt),
     check('provider_credentials_scope_check', sql`${table.scope} IN ('APP', 'DESTINATION')`),

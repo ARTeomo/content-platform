@@ -47,7 +47,7 @@ describe.skipIf(!TEST_DB_URL)('ProviderCredentialsRepository', () => {
     expect(row.encryptionKeyVersion).toBe(1);
   });
 
-  it('is idempotent for APP scope (COALESCE handles NULL destination_id)', async () => {
+  it('is idempotent for APP scope (provider_credentials_app_uq handles NULL destination_id)', async () => {
     await txManager.run(async (tx) =>
       repo.upsert(tx, {
         scope: 'APP',

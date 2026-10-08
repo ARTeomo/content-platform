@@ -10,14 +10,18 @@ import { webhookEndpoints } from './webhook-endpoints.js';
  * A subscription belongs to a destination (Page) and represents one
  * provider-side webhook subscription. It is the inbound analogue of
  * `source_endpoints`: a destination may own multiple subscriptions, and
- * each subscription carries its own verification secret and lifecycle.
+ * each subscription carries its own lifecycle.
  *
- * The `verify_token_encrypted` column stores the App-level verify token
- * encrypted with WEBHOOK_TOKEN_ENCRYPTION_KEY. In v1.2 the token is
- * duplicated per subscription; v1.3 will move it to a `webhook_endpoints`
- * table (see D-013).
+ * ## v1.3.1 target state
  *
- * @see DATABASE_SCHEMA_CONTRACT.md §5.34
+ * The App-level verify token is owned by `webhook_endpoints` (D-013).
+ * This table references the endpoint via `endpoint_id` and does not
+ * carry its own verify-token columns or `last_rotated_at`.
+ *
+ * The legacy `verify_token_encrypted`, `verify_token_key_version`, and
+ * `last_rotated_at` columns were dropped by migrations `0017` and `0018`.
+ *
+ * @see DATABASE_SCHEMA_CONTRACT.md §5.35
  */
 export const webhookSubscriptions = pgTable(
   'webhook_subscriptions',
@@ -36,7 +40,6 @@ export const webhookSubscriptions = pgTable(
     fields: text('fields').array().notNull(),
     status: varchar('status', { length: 32 }).notNull(),
     lastVerifiedAt: nullableTimestampColumn('last_verified_at'),
-    lastRotatedAt: nullableTimestampColumn('last_rotated_at'),
     createdAt: createdAtColumn(),
     updatedAt: updatedAtColumn(),
   },

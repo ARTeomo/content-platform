@@ -35,14 +35,17 @@ export interface ProviderCredentialLookup {
  * is the durable system of record; this repository is the only supported
  * writer.
  *
- * ## Unique identity
+ * ## Unique identity (v1.3.1)
  *
- * The uniqueness is `(provider, credential_type, scope, COALESCE(destination_id, '0..0'))`.
- * The COALESCE is required because PostgreSQL treats NULL as distinct in
- * unique constraints — without it, multiple APP-scope rows could exist
- * for the same provider and credential type.
+ * Two partial unique indexes enforce the APP and DESTINATION scope
+ * rules directly:
  *
- * @see DATABASE_SCHEMA_CONTRACT.md §5.38
+ *   - provider_credentials_app_uq        (provider, credential_type)
+ *                                        WHERE scope = 'APP' AND destination_id IS NULL
+ *   - provider_credentials_destination_uq (provider, credential_type, destination_id)
+ *                                        WHERE scope = 'DESTINATION' AND destination_id IS NOT NULL
+ *
+ * @see DATABASE_SCHEMA_CONTRACT.md §5.40, §8.3
  */
 export class ProviderCredentialsRepository {
   constructor(private readonly db: Database) {}
@@ -51,9 +54,20 @@ export class ProviderCredentialsRepository {
    * Insert a new credential, or update the existing row when a row with
    * the same unique identity already exists.
    *
-   * The upsert matches the functional unique index using an explicit
-   * `COALESCE` in the `ON CONFLICT` clause. Drizzle's `onConflictDoUpdate`
-   * does not support functional targets, so this method uses raw SQL.
+   * ## v1.3.1 unique identity (two partial indexes)
+   *
+   * The uniqueness rule is expressed by two partial indexes:
+   *
+   *   - APP scope:          (provider, credential_type)
+   *                         WHERE scope = 'APP' AND destination_id IS NULL
+   *   - DESTINATION scope:  (provider, credential_type, destination_id)
+   *                         WHERE scope = 'DESTINATION' AND destination_id IS NOT NULL
+   *
+   * The `ON CONFLICT` target and predicate must exactly match the
+   * corresponding partial index predicate, otherwise PostgreSQL raises
+   * "no unique or exclusion constraint matching the ON CONFLICT
+   * specification" (SQLSTATE 42P10). Drizzle's `onConflictDoUpdate` does
+   * not support partial-index targets, so this method uses raw SQL.
    *
    * ## Two-step pattern
    *
@@ -65,6 +79,39 @@ export class ProviderCredentialsRepository {
    * query.
    */
   async upsert(tx: Transaction, input: ProviderCredentialInput): Promise<ProviderCredentialRow> {
+    const id =
+      input.scope === 'APP'
+        ? await this.upsertApp(tx, input)
+        : await this.upsertDestination(tx, input);
+
+    const [row] = await tx
+      .select()
+      .from(providerCredentials)
+      .where(eq(providerCredentials.id, id))
+      .limit(1);
+
+    if (!row) {
+      throw new Error(
+        `Provider credentials upsert returned id ${id} but the subsequent select found no row`,
+      );
+    }
+
+    return row;
+  }
+
+  /**
+   * APP-scope upsert. Targets the `provider_credentials_app_uq` partial
+   * unique index.
+   *
+   * `input.destinationId` MUST be `null` for APP scope — this is enforced
+   * by the schema's `provider_credentials_scope_destination_check` CHECK
+   * constraint, but we guard here too so the failure is explicit.
+   */
+  private async upsertApp(tx: Transaction, input: ProviderCredentialInput): Promise<string> {
+    if (input.destinationId !== null) {
+      throw new Error('APP scope credential must have destinationId = null');
+    }
+
     const rows = (await tx.execute(sql`
       INSERT INTO provider_credentials (
         scope,
@@ -77,8 +124,8 @@ export class ProviderCredentialsRepository {
         expires_at
       )
       VALUES (
-        ${input.scope},
-        ${input.destinationId},
+        'APP',
+        NULL,
         ${input.provider},
         ${input.credentialType},
         ${input.encryptedValue},
@@ -86,12 +133,8 @@ export class ProviderCredentialsRepository {
         ${input.status ?? 'UNKNOWN'},
         ${input.expiresAt ? input.expiresAt.toISOString() : null}::timestamptz
       )
-      ON CONFLICT (
-        provider,
-        credential_type,
-        scope,
-        COALESCE(destination_id, '00000000-0000-0000-0000-000000000000'::uuid)
-      )
+      ON CONFLICT (provider, credential_type)
+        WHERE scope = 'APP' AND destination_id IS NULL
       DO UPDATE SET
         encrypted_value        = EXCLUDED.encrypted_value,
         encryption_key_version = EXCLUDED.encryption_key_version,
@@ -103,22 +146,62 @@ export class ProviderCredentialsRepository {
 
     const first = rows[0];
     if (!first) {
-      throw new Error('Provider credentials upsert returned no rows');
+      throw new Error('Provider credentials APP upsert returned no rows');
+    }
+    return first.id;
+  }
+
+  /**
+   * DESTINATION-scope upsert. Targets the `provider_credentials_destination_uq`
+   * partial unique index.
+   *
+   * `input.destinationId` MUST be a non-null UUID for DESTINATION scope.
+   */
+  private async upsertDestination(
+    tx: Transaction,
+    input: ProviderCredentialInput,
+  ): Promise<string> {
+    if (input.destinationId === null) {
+      throw new Error('DESTINATION scope credential must have a non-null destinationId');
     }
 
-    const [row] = await tx
-      .select()
-      .from(providerCredentials)
-      .where(eq(providerCredentials.id, first.id))
-      .limit(1);
+    const rows = (await tx.execute(sql`
+      INSERT INTO provider_credentials (
+        scope,
+        destination_id,
+        provider,
+        credential_type,
+        encrypted_value,
+        encryption_key_version,
+        status,
+        expires_at
+      )
+      VALUES (
+        'DESTINATION',
+        ${input.destinationId},
+        ${input.provider},
+        ${input.credentialType},
+        ${input.encryptedValue},
+        ${input.encryptionKeyVersion},
+        ${input.status ?? 'UNKNOWN'},
+        ${input.expiresAt ? input.expiresAt.toISOString() : null}::timestamptz
+      )
+      ON CONFLICT (provider, credential_type, destination_id)
+        WHERE scope = 'DESTINATION' AND destination_id IS NOT NULL
+      DO UPDATE SET
+        encrypted_value        = EXCLUDED.encrypted_value,
+        encryption_key_version = EXCLUDED.encryption_key_version,
+        status                 = EXCLUDED.status,
+        expires_at             = EXCLUDED.expires_at,
+        updated_at             = now()
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
 
-    if (!row) {
-      throw new Error(
-        `Provider credentials upsert returned id ${first.id} but the subsequent select found no row`,
-      );
+    const first = rows[0];
+    if (!first) {
+      throw new Error('Provider credentials DESTINATION upsert returned no rows');
     }
-
-    return row;
+    return first.id;
   }
 
   /**

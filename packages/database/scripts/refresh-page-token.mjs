@@ -10,6 +10,10 @@
 // It does NOT touch .env. The token must live in provider_credentials,
 // encrypted at rest.
 //
+// v1.3.1: uses the `provider_credentials_destination_uq` partial unique
+// index. The legacy COALESCE-based ON CONFLICT target is no longer valid
+// after migration 0018.
+//
 // Usage (from the repository root):
 //   export META_USER_ACCESS_TOKEN="EAAG..."
 //   export META_PAGE_ID=1287488901121523       # optional
@@ -117,10 +121,8 @@ try {
       'DESTINATION', ${destinationId}, ${PROVIDER}, ${CREDENTIAL_TYPE},
       ${ciphertext}, ${activeVersion}, 'VALID', NULL
     )
-    ON CONFLICT (
-      provider, credential_type, scope,
-      COALESCE(destination_id, '00000000-0000-0000-0000-000000000000'::uuid)
-    )
+    ON CONFLICT (provider, credential_type, destination_id)
+      WHERE scope = 'DESTINATION' AND destination_id IS NOT NULL
     DO UPDATE SET
       encrypted_value        = EXCLUDED.encrypted_value,
       encryption_key_version = EXCLUDED.encryption_key_version,

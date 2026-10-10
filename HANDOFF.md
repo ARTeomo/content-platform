@@ -3,9 +3,319 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-10-05
-**Last commit:** `4ff04af` (feat(database): complete v1.3.1 CONTRACT migration (0018))
+**Snapshot date:** 2026-10-09
+**Branch:** `chore/downgrade-typescript-5.9.3`
+**HEAD:** `83a5e9e` — `docs(tooling): add TypeScript downgrade runbook`
+**Relationship to `main`:** 2 ahead / 0 behind. `main` HEAD is
+`7fe1e1e` — `fix(worker): wire subscription health writes into
+webhook.process`. The branch is pushed to origin; no open or closed PR
+exists for it. (CONFIRMED 2026-10-09: `git rev-list --count`,
+`git log main`, branch status.)
+**Working tree:** clean. (CONFIRMED 2026-10-09: `git status --porcelain`
+empty before and after every inspection command.)
 **Repository:** https://github.com/ARTeomo/content-platform
+
+---
+
+## Status at a glance (2026-10-09, verified this session)
+
+Everything in this section was re-verified against the checked-out
+files, Git history, configuration, migrations, source, tests, and
+documentation on 2026-10-09. Read-only inspection commands only; the
+only writes anywhere were diagnostic outputs redirected to the system
+temp directory, outside the repository.
+
+### Gates executed at `83a5e9e` (all read-only; exact results)
+
+| Check           | Command (as executed)                                                                                                      | Result                                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Format          | `pnpm format:check`                                                                                                        | **PASS** (exit 0)                                                                                                                    |
+| Typecheck       | per-package `tsc --noEmit -p tsconfig.json --tsBuildInfoFile /tmp/...` (6 packages; build-info redirected out of the repo) | **PASS 6/6** (exit 0 each)                                                                                                           |
+| Migration files | `drizzle-kit check` from `packages/database`                                                                               | PASS ("Everything's fine") — journal/snapshot consistency only; **NOT** contract-conformance evidence (see CP-F-01)                  |
+| Unit tests      | `env -u TEST_DATABASE_URL -u TEST_REDIS_URL pnpm test`                                                                     | **PASS (exit 0): 172 passed / 98 skipped / 270 tests, 31 files**                                                                     |
+| Lint baseline   | `pnpm exec eslint . -f json`                                                                                               | 138 messages: 118 errors + 20 warnings; **14 fatal parse errors, all on `.mjs` operational scripts (CP-F-04, configuration defect)** |
+
+Per-package test detail (DB/Redis env deliberately unset):
+`packages/database` 0 passed / 28 skipped; `packages/interaction-response`
+26 passed; `packages/publishers` 51 passed / 5 skipped;
+`packages/authentication` 24 passed / 13 skipped; `apps/api` 0 / 10
+skipped; `apps/worker` 71 passed / 42 skipped.
+
+**Interpretation limits (binding):**
+
+- The passing test run with `TEST_DATABASE_URL` / `TEST_REDIS_URL`
+  unset is **not** evidence that the 98 skipped integration tests pass.
+  It is evidence only that the 172 non-gated tests pass. The skipped
+  majority includes the entire `packages/database` and `apps/api`
+  suites. 13 test files issue `TRUNCATE ... RESTART IDENTITY CASCADE`
+  fixtures (CONFIRMED by grep); they must never run against shared or
+  production databases.
+- `drizzle-kit check` validates the migration journal/snapshot chain.
+  It does not validate the §20 Path A governance layer (Bridge, Hard
+  Gates, advisory lock, preservation baseline, digests), which remains
+  unimplemented (CP-F-01).
+- Not executed this session (would write into the repository or
+  external state, or was out of scope): `pnpm build` (writes `dist/`),
+  `pnpm install --frozen-lockfile` (modifies `node_modules`),
+  migrations, backfill, any DB/Redis/provider access, any GitHub
+  Actions inspection. The runbook's validation matrix still lists
+  `pnpm build` and `pnpm install --frozen-lockfile` as pending; that
+  listing remains accurate.
+- No runtime/E2E behavior was exercised this session. All runtime
+  claims below are static source verifications, labeled as such.
+
+### Toolchain (CONFIRMED)
+
+- Node.js 22.x (`.nvmrc` = `22`; observed v22.21.0 during this session).
+- pnpm **12.3.4** (`packageManager`), engines `node >=22`, `pnpm >=12`.
+- TypeScript **5.9.3** — root `package.json`, `pnpm-workspace.yaml`
+  override (`typescript: 5.9.3`), all six workspace manifests, lockfile.
+  Downgrade commit `28ffa40` touches exactly 9 files (7 manifests +
+  `pnpm-workspace.yaml` + `pnpm-lock.yaml`; CONFIRMED via
+  `git show --stat`).
+- ESLint 10.10.0, `@eslint/js` 10.0.1, `typescript-eslint` 8.70.0
+  (peer range `>=4.8.4 <6.1.0` — 5.9.3 in range), Prettier 3.9.6,
+  Drizzle ORM 0.45.2 / Kit 0.31.10, Vitest 5.0.0.
+- Six active workspace packages: `apps/api`, `apps/worker`,
+  `packages/database`, `packages/authentication`,
+  `packages/interaction-response`, `packages/publishers`.
+  `apps/admin` is a scaffold without its own `package.json` /
+  `tsconfig.json` and is not an active workspace package.
+
+### Do-NOT-run conditions (binding until the cited items close)
+
+1. **No production migration of a populated v1.2 database.** The
+   v1.3.1 contract's Path A governance (Compatibility Bridge,
+   Hard Gates #1/#2, session-level advisory lock per INVARIANT-08/20,
+   immutable preservation baseline per INVARIANT-22/§20.2.3 step 1a,
+   §2.8 canonical-JSON SHA-256 digests per INVARIANT-19, §20.2.9
+   session state machine) is CONFIRMED present in the contract text and
+   CONFIRMED absent from the implementation (migrations 0015–0018 +
+   `backfill-webhook-endpoints.mjs` + plain `drizzle-kit migrate`).
+   Dev/recreatable databases and greenfield Path B only. (CP-F-01;
+   owner decision OPEN.)
+2. **No destination deletion by any path.** `interaction_responses.
+destination_id` is NOT NULL with an `ON DELETE SET NULL` FK in the
+   Drizzle schema (`interaction-responses.ts:49-51`) and in the applied
+   migration `0011_natural_orphan.sql:58`; the contract mandates
+   RESTRICT (§5.41, line 2081; rationale lines 2114-2116). Any delete
+   of a referenced destination fails with a NOT NULL violation.
+   (CP-F-02; corrective proposal WP-1, unimplemented.)
+3. **No CI lint gate** until CP-F-04 is fixed and the lint baseline is
+   triaged per WP-3/WP-8; adding it now would block every merge with
+   118 errors. (CP-F-05, WP-7.)
+
+---
+
+## Milestone: Post-v1.3.1 hardening — comprehensive engineering audit and TypeScript downgrade
+
+A comprehensive engineering audit (2026-10-09, external, strictly
+read-only) and a follow-up local read-only reconciliation session
+re-verified the repository against the live tree. This section
+consolidates the results: a findings register with stable IDs, the
+reconciliation of every historical finding, the documentation drift
+register, the owner decision register, and the work-package roadmap.
+Audit trail: the audit deliverable is embedded here; no separate audit
+document exists in the repository.
+
+### Commits since the previous snapshot (`4ff04af`, 2026-10-05)
+
+| Commit    | Subject                                                             | Evidence notes                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `7fe1e1e` | `fix(worker): wire subscription health writes into webhook.process` | 4 files: worker bootstrap +6 lines, `webhook-process-service.ts` +63, two test files +205. Resolves the health-writes half of the prior wiring-gap pending item. Worker suite grew 111 → 113 tests. (CONFIRMED via `git show --stat`; wiring CONFIRMED in `apps/worker/src/index.ts:107,213`.)                                                                                                                                                        |
+| `28ffa40` | `chore(tooling): downgrade typescript to 5.9.3`                     | Exactly 9 files (7 package.json + `pnpm-workspace.yaml` + `pnpm-lock.yaml`; see Toolchain). Resolves pending item #2.                                                                                                                                                                                                                                                                                                                                 |
+| `83a5e9e` | `docs(tooling): add TypeScript downgrade runbook`                   | Runbook at `docs/operations/typescript-7-0-2-to-5-9-3-downgrade-runbook-content-platform.md`. Its validation matrix lists `pnpm test`, `pnpm build`, `pnpm format:check`, `pnpm install --frozen-lockfile`, CI lint re-enable, HANDOFF update, commit, PR, merge; as of this snapshot test and format:check are now PASS (executed 2026-10-09), build and frozen-lockfile install remain pending, the commit and push are done, PR/merge remain open. |
+
+### Findings register
+
+Status legend: **CONFIRMED** = verified against the checked-out
+repository this session with file/line evidence. **RESOLVED** = closed
+by repository evidence. **OPEN** = live defect or decision not yet
+acted on. **PARTIALLY VERIFIED** = static evidence only; runtime
+behavior not exercised.
+
+| ID      | Sev                               | Status                                         | Finding and evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------- | --------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| CP-F-01 | High                              | CONFIRMED, OPEN (owner decision)               | The normative `DATABASE_SCHEMA_CONTRACT.md` v1.3.1 (Normative: Yes, Production-Ready) requires for a populated-v1.2 production upgrade (Path A): Compatibility Bridge (INVARIANT-05, §20), token-rotation dual-write (INVARIANT-17), Bridge upsert compare-and-abort (INVARIANT-18), §2.8 SHA-256 preservation digests (INVARIANT-19), session-level advisory lock for 0016 (INVARIANT-08/20, §20.2.3), immutable pre-migration baseline (INVARIANT-22), §20.2.9 session state machine, Hard Gates #1/#2 (§20.2.4). CONFIRMED present in contract text (lines 190–284, 3934). CONFIRMED absent from the implementation: migrations 0015–0018, `packages/database/scripts/backfill-webhook-endpoints.mjs`, and `db:migrate` = plain `drizzle-kit migrate` contain none of these mechanisms. HANDOFF (prior revision) documented this as a deliberate dev-DB-only simplification; the code as shipped cannot safely perform the contract's production upgrade. |
+| CP-F-02 | High                              | CONFIRMED, fix direction NORMATIVE             | `interaction_responses.destination_id`: Drizzle schema `packages/database/src/schema/interaction/interaction-responses.ts:49-51` declares `.notNull()` + `onDelete: 'set null'`; applied migration `packages/database/migrations/0011_natural_orphan.sql:58` emits `ON DELETE set null`. Contract §5.41 (line 2081) specifies `FK → destinations.id ON DELETE RESTRICT`, with rationale (lines 2114-2116): "setting the column to NULL would violate its NOT NULL declaration." HANDOFF invariant 19 repeats RESTRICT. PostgreSQL accepts the contradictory DDL; any delete of a referenced destination fails at runtime. Blast radius: CONFIRMED by repo-wide search — the only `.delete(` in application code is `outbox-repository.ts:154`; no application path deletes destinations, so the defect is latent (manual SQL / future admin UI) today. The dev database (Neon) currently carries the defective FK.                                           |
+| CP-F-03 | Medium                            | CONFIRMED, OPEN                                | No advisory locking anywhere in the migration path: `packages/database/package.json` (`db:migrate` = `drizzle-kit migrate`, one transaction per migration), no lock in the backfill script, no custom runner, no CI migration step. Concurrent operators/deployments can race the backfill (duplicate `webhook_endpoints` rows) or the migration journal. The absence of locking is CONFIRMED; an actual harmful interleaving was not reproduced (not attempted, read-only session).                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| CP-F-04 | Medium                            | CONFIRMED, fix SPECIFIED (WP-6, unimplemented) | `eslint.config.js:27` uses `projectService: true` with no `allowDefaultProject` and no scripts tsconfig. All 14 operational `.mjs` scripts (13 × `packages/database/scripts/`, 1 × `apps/worker/scripts/inspect-bullmq.mjs`; CONFIRMED by glob) produce fatal "file not found" parse errors under the project service. Reproduced at HEAD: exactly 14 fatal messages across 14 files. Configuration defect, not source defects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| CP-F-05 | Medium                            | CONFIRMED, OPEN                                | `.github/workflows/ci.yml` runs install → format:check → typecheck → test. Lint and build are absent. The header comment (lines 12-19) claims a TS 7.0.2 pin and typescript-eslint incompatibility — factually obsolete post-downgrade. Job name says "Build, typecheck, test" but no build step exists (build runs only as `postinstall`). The runbook (§7) explicitly recommends re-enabling lint only after the quality gate is green.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| CP-F-06 | Low                               | CONFIRMED, scope enlarged (see CP-F-15)        | `README.md:8` badge `typescript-7.0` (actual 5.9.3); `README.md:9` badge `tests-251 passing` (unverified and wrong: 251 was a total test count, not a pass count; at HEAD the totals are 172 passed / 98 skipped / 270 with DB env unset); `HANDOFF.md` (prior revision) header cited last commit `4ff04af` (actual `83a5e9e`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| CP-F-07 | Medium                            | CONFIRMED, refined by source triage            | Four genuine (non-config, non-convention) lint findings — but only one is production code: `preserve-caught-error` at `apps/worker/src/config.ts:89` (re-wrapped error loses `cause`). The other three are test-file findings: `no-base-to-string` at `apps/worker/src/interaction-response/meta-graph-bridge.test.ts:27`; `no-floating-promises` at `apps/worker/src/webhook/webhook-process-service-policy.test.ts:196`; `no-unsafe-return` at `packages/database/src/repositories/outbox-repository.test.ts:128`. The remaining 134 messages are: 14 config fatals (CP-F-04), 82 `require-await` (73 test mocks + 9 interface-preserving implementations such as the Fastify plugin contract at `meta.ts:32` and scheduler `stop()` methods), 6 `no-unused-vars` (mostly tests), 6 auto-fixable `consistent-type-imports`, 6 auto-fixable `no-unnecessary-type-assertion`, plus 20 warnings (15 `explicit-function-return-type`, 5 `no-console`).         |
+| CP-F-08 | Medium                            | CONFIRMED, OPEN                                | DB/Redis-backed tests self-skip via `describe.skipIf(!TEST_..._URL)`. Observed 2026-10-09: 98 of 270 tests skipped without env vars, including the whole `packages/database` and `apps/api` suites. CI passes `TEST_DATABASE_URL`/`TEST_REDIS_URL` secrets; whether CI runs actually execute the gated suites was NOT inspected this session (no GitHub Actions access) — PARTIALLY VERIFIED.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| CP-F-09 | Low (dev) / High (populated prod) | CONFIRMED, OPEN                                | `0017_webhook_endpoints_contract.sql` builds the new unique index with plain `CREATE UNIQUE INDEX` (correctly non-concurrent, since drizzle-kit wraps each migration in one transaction) and uses ACCESS EXCLUSIVE `SET NOT NULL`. Fine for dev; must be re-evaluated in any production protocol. Folds into CP-F-01/WP-2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| CP-F-10 | Low                               | CONFIRMED, OPEN                                | Backfill ordering is procedural: an operator must run `backfill-webhook-endpoints.mjs` between 0016 and 0017; `drizzle-kit migrate` never invokes it. 0017's DO-block NULL check is a genuine, confirmed guard against un-backfilled rows. Folds into WP-2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| CP-F-11 | Info                              | RESOLVED                                       | The uploaded ESLint report's applicability to HEAD: the lint baseline was regenerated at HEAD `83a5e9e` and matches the report exactly — 209 files, 118 errors + 20 warnings = 138 messages, 14 fatals, identical per-rule histogram. Report-to-HEAD linkage CONFIRMED.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| CP-F-12 | Low                               | NEW, CONFIRMED, OPEN (contract amendment)      | Contract §5.41 status vocabulary (contract lines 2098-2112, 10 statuses, labeled "complete, aligned with §9.3") contradicts §56.1 and the implemented CHECK (`interaction-responses.ts:67-70`, `0011:14`): the schema enforces 15 statuses, adding `EDITED`, `QUEUED`, `IN_PROGRESS`, `RETRY`, `UNKNOWN`, `RECONCILIATION`. The schema/§56.1 side is the correct one (reconciliation states are mandatory elsewhere in the contract); §5.41 needs a contract amendment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| CP-F-13 | Low                               | NEW, CONFIRMED, OPEN                           | `interaction-responses.ts:40` doc-comment cross-references `DATABASE_SCHEMA_CONTRACT.md §5.39, §9.3`; §5.39 is `external_interactions`. The `interaction_responses` section is §5.41 (contract line 2073). One-line doc fix.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| CP-F-14 | Low                               | NEW, CONFIRMED, OPEN                           | The prior HANDOFF revision documented the GET handshake as dual-read (endpoint-first, subscription fallback). The current code is endpoint-only: `apps/api/src/routes/webhooks/meta.ts:114-117` states the legacy subscription-scoped path was removed after migration 0017, and the handler decrypts only `webhook_endpoints` rows with AAD `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>` (`meta.ts:128-155`). The dual-read existed during the migration window (commit `cb9fcee`); HANDOFF described it as current past its removal. Doc-side drift; the GET contract (`hub.mode`/`verify_token`/`challenge`, 200 plaintext challenge, 403 on mismatch) is unchanged.                                                                                                                                                                                                                                                                                         |
+| CP-F-15 | Low                               | NEW, CONFIRMED, OPEN                           | Count/version staleness beyond CP-F-06: repository classes = **19** files (prior HANDOFF said 16 exported; README says 15 — both stale; the three newer classes are `SystemConfigRepository`, `NotificationsRepository`, `SystemLogsRepository`). Tables = **45** (README structure block says 44). Migrations = **19** (`0000`–`0018`; README says 15). Tests = **270** total (prior HANDOFF said 268; README badge 251). Prior HANDOFF toolchain section said TS 7.0.2; pending item #2 and the "TypeScript 7 + ESLint" trap are obsolete; TECHNICAL_SPECIFICATION.md v0.9.0 header says "Language: TypeScript 7.0" (stale).                                                                                                                                                                                                                                                                                                                               |
+
+---
+
+### Material corrections to earlier audits (recorded explicitly)
+
+1. **Audit inventory path correction:** the external audit referenced
+   migrations under `packages/database/drizzle/`; the actual path is
+   `packages/database/migrations/` with the journal at
+   `packages/database/migrations/meta/_journal.json` (19 entries,
+   `0000`–`0018`, all `breakpoints: true`; CONFIRMED by direct read).
+2. **CP-F-02 reframed:** the external audit presented the
+   `destination_id` referential action as an unresolved owner choice
+   (nullable vs RESTRICT vs CASCADE). The contract already decides:
+   §5.41 mandates NOT NULL + ON DELETE RESTRICT with explicit
+   rationale, and HANDOFF invariant 19 repeats it. What remains is
+   owner **sign-off** on the corrective implementation (WP-1), not a
+   design decision.
+3. **CP-F-07 refined:** three of the four "genuine" lint findings are
+   in test files; only `apps/worker/src/config.ts:89` is production
+   code. This narrows WP-3 substantially and couples most of the
+   cleanup to the WP-8 test-scoping policy.
+4. **Test-count drift:** the historical "172 passed / 93 skipped"
+   figure — its passed half is CONFIRMED at HEAD (172), but skipped is
+   now 98 (`7fe1e1e` added DB-gated tests). The README "251 passing"
+   badge is doubly wrong (wrong then as a label, stale now as a
+   number).
+5. **Handshake description (CP-F-14)** and **doc counts (CP-F-15)** as
+   registered above.
+6. **WP-6 mechanism correction:** the external audit's primary
+   suggestion (`projectService.allowDefaultProject` for the 14 script
+   globs) is not viable — the installed `typescript-estree@8.70.0`
+   hard-caps default-project matches at 8 files
+   (`Too many files (>8) have matched the default project`; the
+   documented override is literally named
+   `maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING`).
+   CONFIRMED in the installed package sources this session. The audit's
+   sanctioned alternative (dedicated scripts tsconfig) is the correct
+   route; specified in WP-6 below.
+7. **`drizzle-kit check` scope:** the PASS result recorded above
+   covers journal/snapshot consistency only. It is not evidence of
+   conformance to the contract's migration governance; CP-F-01 stands.
+8. **CI state:** the external audit reported "no open or closed PRs"
+   for this branch — re-confirmed locally is impossible (no GitHub
+   access this session); retained as UNVERIFIED-but-uncontradicted,
+   last verified 2026-10-09 by the external audit over HTTP.
+
+### Historical findings F1–F7, AT-01 — reconciliation (2026-10-09)
+
+All were verified by **static source inspection** this session
+(read-only). None was re-exercised at runtime; runtime/E2E
+re-verification remains WP-5.
+
+| ID                                                     | Status                        | Evidence                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1 webhook ingress transaction boundary                | **VERIFIED CLOSED (static)**  | `apps/api/src/routes/webhooks/meta.ts:45-108`: raw-body → HMAC-SHA256 verify (fail-closed 401) → JSON parse → Zod envelope → single `txManager.run()` (lines 76-103) containing destination lookup, idempotent `webhook_events` insert, and conditional `outbox_jobs` enqueue; HTTP 200 after commit. Exactly the documented boundary; no Redis on the hot path.                      |
+| F2 interaction-response config from `system_config`    | **VERIFIED CLOSED (static)**  | `apps/worker/src/index.ts:116,131-157` + `apps/worker/src/credentials/runtime-config-loader.ts`: rules, templates, and rate limits load from `system_config` with fail-closed defaults and logged defaulted keys. Seed migration `0013_seed_system_config.sql` present.                                                                                                               |
+| F3/F4 Redis-backed Meta rate limiters on both adapters | **VERIFIED CLOSED (static)**  | One `RedisMetaRateLimiter` (`index.ts:177`) constructed with dedicated Redis connection (92-99) and injected into both `MetaInteractionAdapter` (line 239) and `MetaPublisherAdapter` (line 244). `RedisMetaRateLimiter implements MetaRateLimiter, MetaPublishRateLimiter` (`redis-meta-rate-limiter.ts:127`). Enforcement at runtime not traced — PARTIALLY VERIFIED beyond wiring. |
+| F5 DB-backed credentials in worker outbound paths      | **VERIFIED CLOSED (static)**  | `index.ts:161-173`: `MetaCredentialService` is mandatory at boot (worker refuses to start without it); `buildGetAccessToken` bridge feeds both adapters. Credential-consumption runtime paths not traced — PARTIALLY VERIFIED beyond wiring.                                                                                                                                          |
+| F6 scheduler credential-health gate                    | **VERIFIED CLOSED (static)**  | `apps/worker/src/publication/publication-scheduler-service.ts:79` calls `credentialService.healthCheck(destinationId)`; scheduler receives the service at `index.ts:379`. Gate semantics (INVALID → FAILED) per the service implementation and its 17 tests (DB-gated).                                                                                                               |
+| F7 outbox system operations, rebuild, cleanup          | **VERIFIED CLOSED (static)**  | `apps/worker/src/index.ts:184` (dispatcher), 404-459 (rebuild service/worker, cleanup service/worker, hourly cleanup scheduler). `outbox_jobs.job_id` UNIQUE idempotency anchor enforced at schema level (INVARIANT-27 in this document; `outbox-jobs.ts`).                                                                                                                           |
+| AT-01 audit-trail completeness                         | **RESOLVED by design record** | `audit_logs` has no writer by a documented deferred decision (admin-UI milestone; Sprint C record below). `system_logs` and `notifications` writers are wired (`index.ts:122-127`). "Mapping validation" aspects of AT-01 were never precisely defined; retained as an evidence gap, not a defect.                                                                                    |
+
+**Still open from the wiring-gap pending item:**
+`InteractionModerationActionsRepository` is CONFIRMED absent from
+`apps/worker/src/index.ts` (its import list, lines 2-20, does not
+include it; repo-wide grep finds no worker usage). Interaction
+moderation decisions are not persisted to
+`interaction_moderation_actions`. The repository implementation and
+its tests exist. The `webhook_subscription_health` half was resolved by
+`7fe1e1e` (`webhook-process-service.ts` now takes
+`subscriptionHealthRepo`, wired at `index.ts:107,213`).
+
+---
+
+### Documentation and specification drift register (WP-9 input)
+
+CONFIRMED by direct read on 2026-10-09:
+
+- `README.md`: badges `typescript-7.0` (line 8) and `tests-251
+passing` (line 9); structure block "44 tables" / "15 repository
+  classes" / "migrations 0000 - 0014"; documentation map cites
+  "DATABASE_SCHEMA_CONTRACT.md v1.2"; "Project status" says v1.3 is
+  "Next"; workspace table totals 251. All stale (correct values: TS
+  5.9.3; 172 passed/98 skipped/270 total; 45 tables; 19 repository
+  classes; 19 migrations; contract v1.3.1; v1.3.1 complete).
+- `HANDOFF.md` (prior revision): header commit/date; toolchain TS
+  7.0.2; pending item #2 (downgrade) — now RESOLVED; "TypeScript 7 +
+  ESLint compatibility" trap — obsolete; handshake dual-read paragraph
+  — superseded (CP-F-14); workspace/test/repo counts (CP-F-15);
+  pending item #5 (LOGICAL spec status) — now RESOLVED.
+- `docs/architecture/TECHNICAL_SPECIFICATION.md` v0.9.0: header says
+  "Language: TypeScript 7.0"; body aligned to DB contract v1.2 (44
+  tables). Supersessions of §136 et al. are recorded in the contract
+  header (contract lines 48-56) and in this document's
+  source-of-truth hierarchy.
+- `docs/architecture/LOGICAL_MODEL_SPECIFICATION.md`: **v1.0, Status
+  Final** — presence and status CONFIRMED (resolves prior pending
+  item #5). No supersession indicators.
+- `docs/architecture/META_INTEGRATION_SPECIFICATION.md` v1.4:
+  baseline DB v1.2; contract header explicitly supersedes its §5 and
+  §48; HANDOFF's drift list (§9.8, §36, §52, §2.2) remains the
+  reconciliation input.
+- `docs/architecture/DATABASE_SCHEMA_CONTRACT.md` v1.3.1: Normative,
+  Production-Ready, self-contained; internal inconsistency at §5.41
+  status vocabulary (CP-F-12) is the one confirmed defect _inside_ the
+  contract.
+- `.github/workflows/ci.yml`: header comment obsolete (CP-F-05).
+- `packages/database/src/schema/interaction/interaction-responses.ts`:
+  §5.39 cross-reference error (CP-F-13).
+
+### Owner decision register (genuinely open; not decidable from the repository)
+
+1. **CP-F-01 — Path A:** implement the full §20 four-phase protocol
+   (Bridge deployment, Hard Gates #1/#2, advisory-lock single-session
+   runner, immutable baseline + §2.8 digests, §20.2.9 state machine),
+   or formally amend the contract to a documented dev-only scope with
+   a separately-defined production protocol later. **No default is
+   recorded here; this is the owner's call.** Blocks WP-2 and all
+   production-upgrade eligibility. The do-not-run condition at the top
+   of this document binds until this decision is made and the chosen
+   implementation is verified against the contract.
+2. **CP-F-02 — sign-off, not design:** the contract already mandates
+   RESTRICT. Owner sign-off is requested for WP-1 (schema change +
+   migration 0019) because it is a DDL change to a table with business
+   data, not because the target state is undecided.
+3. **WP-8 policy:** approve config-scoped lint-rule relaxation for
+   `**/*.test.ts` (`require-await` and, per triage, the three
+   test-file findings in CP-F-07). Constraint: never strip `async`
+   from throwing mocks (changes rejection timing); never disable rules
+   globally to go green.
+4. **Merge strategy (Q10):** merge `chore/downgrade-typescript-5.9.3`
+   into `main` now, or after the lint chain (WP-6/3/8/7) lands. The
+   branch is toolchain-consistent and `main` has no lint gate either
+   way; merging is low-risk but remains an owner call.
+
+---
+
+### Work packages (dependency-aware roadmap; nothing below is implemented)
+
+Status values: **PROPOSED** (not started; this document is the spec),
+**GATED** (blocked by a decision or prerequisite).
+
+| WP   | Addresses                         | Status                      | Dependencies                                 | Outline, acceptance, risk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---- | --------------------------------- | --------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WP-6 | CP-F-04                           | PROPOSED, recommended first | none                                         | Add `packages/database/scripts/tsconfig.json` and `apps/worker/scripts/tsconfig.json` (identical minimal content: `target ES2022`, `module ESNext`, `moduleResolution Bundler`, `allowJs: true`, `checkJs: false`, `strict: true`, `noEmit: true`, `skipLibCheck: true`, `include: ["./**/*.mjs"]`). The project service auto-discovers them; `@types/node` already resolves in both packages (both declare `@types/node ^22`; CONFIRMED present in each package's `node_modules/@types`). No dependency or lockfile change; builds unaffected (no tsconfig references the scripts projects). Add one scoped block to `eslint.config.js` for `files: ['**/*.mjs']` setting `'no-undef': 'off'` with justification (type-aware linting + Node globals resolved by TS; mirrors typescript-eslint's own `eslint-recommended` rationale). **Do not** use `allowDefaultProject` (8-file hard cap, correction #6 above). Acceptance: `pnpm lint` shows 0 fatal parse errors; error count drops by exactly 14 modulo drift; typed rules still load for TS sources; format/typecheck/tests unchanged green. Risk: minimal — config-only, no runtime or dependency changes. Unimplemented and unverified as of this snapshot. |
+| WP-3 | CP-F-07 (production item)         | PROPOSED                    | none                                         | One-line-class fix at `apps/worker/src/config.ts:89`: attach `cause` to the re-wrapped error so the root cause is preserved. Classified by source inspection: the other three CP-F-07 findings are test-file findings and belong to WP-8's policy. Acceptance: finding closed with a unit test if the path is observable; lint count for production-code findings reaches 0 or carries an explicit waiver. Risk: minimal. Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| WP-8 | test lint noise + 3 test findings | GATED (policy approval #3)  | none technically                             | Scope `require-await` (73 test occurrences) and triage the three test-file findings (`meta-graph-bridge.test.ts:27`, `webhook-process-service-policy.test.ts:196`, `outbox-repository.test.ts:128`) via config for `**/*.test.ts` or targeted fixes. Acceptance: lint green on tests without behavioral test edits; documented justification. Risk: low if config-scoped; medium if any `async` is stripped from throwing mocks. Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| WP-7 | CP-F-05                           | GATED                       | WP-6, WP-3, WP-8 decision                    | Add `pnpm lint` and an explicit `pnpm build` step to CI; delete the obsolete header comment (lines 12-19). Matches the runbook §7 sequence. Acceptance: green CI on a clean tree at the enforced quality gate. Risk: enabling lint before WP-6/3/8 blocks all merges (118 errors). Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| WP-1 | CP-F-02                           | GATED (owner sign-off #2)   | none technically; dev-DB backup before apply | Change `interaction-responses.ts:51` to `onDelete: 'restrict'`; generate migration 0019 via `drizzle-kit generate` (DROP/ADD of the destination FK constraint); contract §5.41 text is already correct — no contract change beyond the unrelated CP-F-12; add a repository/service test asserting that deleting a referenced destination is rejected and that schema/migration parity holds (`drizzle-kit generate` prints "No schema changes"). Apply to the dev database only, after backup, and **never** against a populated production database within the CP-F-01 do-not-run condition. The corrective migration is **proposed, unimplemented, and unverified**. Acceptance: schema, migration 0019, contract §5.41, and tests agree; typecheck/lint/tests green. Risk: low on dev (no app code deletes destinations — CONFIRMED); FK action change would surface only in paths that attempt destination deletion.                                                                                                                                                                                                                                                                                             |
+| WP-9 | CP-F-06/12/13/14/15               | PROPOSED                    | none; coordinate with WP-7 for ci.yml        | Refresh README (badges, 45 tables, 19 repos, 19 migrations, contract v1.3.1, test counts or a CI-generated badge); refresh this document's stale sections (done by this revision); contract §5.41 vocabulary amendment (CP-F-12); `interaction-responses.ts` cross-ref fix (CP-F-13); TECH spec header (TypeScript 7.0 → 5.9.3) and v1.3.1 compatibility notes; META spec supersession notes; CI-generated lint/test artifacts carrying commit SHAs. Acceptance: docs match HEAD; future reports are revision-bound. Risk: documentation-only. Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| WP-4 | CP-F-08                           | PROPOSED                    | none                                         | Add Postgres + Redis service containers to a separate CI job so the 98 skipped tests execute on PRs against ephemeral instances only. The 13 TRUNCATE-based test files (CONFIRMED by grep) make shared/production databases absolutely off-limits. Provide `TEST_DATABASE_URL`/`TEST_REDIS_URL` pointed at the services. Acceptance: CI logs show the gated suites executed and passing. Risk: CI-only; test isolation configuration errors could flake — mitigate with service containers scoped to the job. Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| WP-5 | remaining runtime evidence        | PROPOSED                    | none                                         | Re-run the real E2E verifications (inbound webhook POST → materialization; outbound publication) against the current HEAD, trace the runtime paths only statically verified above (F3/F4/F5 enforcement, outbox/BullMQ idempotency interplay), and re-run the DB-gated suites against an ephemeral database with env vars set. Records results as new evidence; no defect is presumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| WP-2 | CP-F-01/03/09/10                  | GATED (owner decision #1)   | decision #1; then substantial design         | Only after the owner decides "implement §20": advisory-lock single-session runner (`pg_advisory_lock` fixed key, pinned connection per INVARIANT-20/08), immutable pre-migration baseline + §2.8 canonical-JSON SHA-256 digests, Compatibility Bridge with compare-and-abort upserts, executable Hard Gates #1/#2, production index strategy, and a rehearsal on a restored production-shaped copy with digest verification and concurrent-runner tests. If the owner decides "amend contract", WP-2 becomes the contract-amendment work plus a separately-scoped future production protocol. **No production migration until this WP completes and passes rehearsal.** Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+### Release gates (summary)
+
+| Action                           | Gate                                                                                               |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| lint/typecheck/format/unit tests | none beyond a clean install                                                                        |
+| DB integration tests             | `TEST_DATABASE_URL` pointing at an **ephemeral** DB only (tests TRUNCATE); never shared/production |
+| Redis integration tests          | `TEST_REDIS_URL` ephemeral, isolated DB/prefix                                                     |
+| migration execution (dev)        | recreatable dev DB; backfill ordering 0016 → backfill → 0017                                       |
+| migration execution (production) | **PROHIBITED** until WP-2 completes with rehearsal + explicit human authorization                  |
+| provider tests                   | Meta sandbox credentials only; live mutations need explicit authorization                          |
+| production deployment            | owner decisions #1-#2 resolved; P1 work merged; staged rollout                                     |
 
 ---
 
@@ -16,7 +326,7 @@ has been migrated to the v1.3.1 target state. This milestone covers the
 two aggregate-boundary changes (D-013 `webhook_endpoints`, D-016
 provider-aware natural key), the AAD-form correction in the Meta setup
 runbook, and the completion migration (`0018`) that closes the schema
-target.
+target state.
 
 ### Commits
 
@@ -68,7 +378,10 @@ Target (v1.3.1):
 ```
 
 The `WebhookTokenEncryptionProvider` supports both forms; the API
-handshake uses endpoint-first verification with subscription fallback.
+handshake used endpoint-first verification with subscription fallback
+during the migration window (commit `cb9fcee`) — the fallback path was
+removed from the code after migration 0017 (current code:
+`meta.ts:114-117`, endpoint-only; see CP-F-14).
 
 **Schema target state (reached).**
 
@@ -138,14 +451,18 @@ migration (`0018`) for the two remaining schema gaps. The
 Compatibility Bridge and Hard Gate phases were not implemented because
 the development database was recreatable. A production deployment on a
 populated v1.2 database requires the full four-phase protocol from
-`DATABASE_SCHEMA_CONTRACT.md` v1.3.1 §20.
+`DATABASE_SCHEMA_CONTRACT.md` v1.3.1 §20. This remains true as of the
+2026-10-09 re-verification (CP-F-01); the decision whether to implement
+§20 or amend the contract is open with the owner.
 
 ### Verified target state
 
 The `drizzle.__drizzle_migrations` table contains 19 rows (`0000`–`0018`).
 The `_journal.json` contains 19 entries. Both are in sync.
+(Re-verified at repository level on 2026-10-09: journal at
+`packages/database/migrations/meta/_journal.json`, 19 entries.)
 
-Verified after migration:
+Verified after migration (2026-10-05, against Neon):
 
 - ✅ `webhook_endpoints` exists with all v1.3.1 columns.
 - ✅ `webhook_subscriptions.endpoint_id` is NOT NULL.
@@ -270,7 +587,8 @@ Three items from the readiness audit:
   the scheduler after the scan transaction commits.
 - **N6** — the README was stale relative to the Phase 20 state. It
   now reflects Phase 20 completion, the CI pipeline, and the current
-  test counts.
+  test counts. (Superseded: as of 2026-10-09 the README counts are
+  again stale — see the drift register, WP-9.)
 
 ### Audit trail
 
@@ -913,9 +1231,9 @@ Database records created during the Phase 18a E2E test:
 **v1.3.1 note.** After the v1.3.1 completion migration (`0018`), the
 `webhook_subscriptions.verify_token_*` and `last_rotated_at` columns no
 longer exist. The verify token is owned by `webhook_endpoints`. The
-`webhook_subscriptions.id` above will need a corresponding
-`webhook_endpoints.id` after migration; the token rotation and
-endpoint-upsert rules from `DATABASE_SCHEMA_CONTRACT.md` v1.3.1
+`webhook_subscriptions.id` above has a corresponding
+`webhook_endpoints.id` in the migrated dev database; the token rotation
+and endpoint-upsert rules from `DATABASE_SCHEMA_CONTRACT.md` v1.3.1
 INVARIANT-17 and INVARIANT-18 apply.
 
 **Security note:** the Meta App Secret, the ngrok authtoken, and
@@ -939,26 +1257,34 @@ not committed to the repository.
 
 ### Workspace
 
-Six workspace packages:
+Six workspace packages (270 tests total; per-package figures are
+2026-10-09 measurements with DB/Redis env unset — "skipped" tests are
+the DB/Redis-gated suites that self-skip without the env vars):
 
-| Package                         | Purpose                                                                                                               | Tests   |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------- |
-| `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                          | 28      |
-| `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                  | 37      |
-| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 26      |
-| `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter | 56      |
-| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 111     |
-| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 10      |
-| **Total**                       |                                                                                                                       | **268** |
+| Package                         | Purpose                                                                                                               | Tests (passed/skipped)    |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `packages/database`             | Drizzle schema, migrations, repositories, TransactionManager                                                          | 0 / 28 (28, all DB-gated) |
+| `packages/authentication`       | AES-256-GCM, MetaCredentialService, Graph API client                                                                  | 24 / 13 (37)              |
+| `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                                | 26 / 0 (26)               |
+| `packages/publishers`           | MetaInteractionAdapter, MetaPublisherAdapter, MetaResponseReconciler, MetaPublicationReconciler, RedisMetaRateLimiter | 51 / 5 (56)               |
+| `apps/worker`                   | OutboxDispatcher, publication scheduler, interaction response scheduler, system queues, observability services        | 71 / 42 (113)             |
+| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                                       | 0 / 10 (10, DB-gated)     |
+| **Total**                       |                                                                                                                       | **172 / 98 (270)**        |
 
-Test file count: 31 across the six packages. The 268-test verification
-is recorded with `TEST_DATABASE_URL` and `TEST_REDIS_URL` available.
-Without those, the DB- and Redis-backed tests skip.
+Test file count: 31 across the six packages (matches the ESLint
+baseline file count). The 172-passed figure matches the historical
+"172 passed" record; the historical "93 skipped" has drifted to 98
+because `7fe1e1e` added DB-gated tests. With `TEST_DATABASE_URL` and
+`TEST_REDIS_URL` set, the gated suites run against those databases;
+without them, the suites silently skip (see the skipIf trap below).
 
 ### Database schema — v1.3.1 target state
 
-- **45 tables** implementing DB v1.3.1.
-- **19 migrations** (`0000` – `0018`), applied to Neon PostgreSQL.
+- **45 tables** implementing DB v1.3.1. (45 `pgTable(` declarations
+  across 44 schema files; one file declares two tables.)
+- **19 migrations** (`0000` – `0018`), applied to Neon PostgreSQL;
+  journal at `packages/database/migrations/meta/_journal.json`
+  (the migration directory is `packages/database/migrations/`).
 - `pgcrypto` extension registered in `0000`, never re-declared.
 - `webhook_endpoints` created by `0015`.
 - `webhook_subscriptions.endpoint_id` NOT NULL after `0017`.
@@ -972,11 +1298,17 @@ Without those, the DB- and Redis-backed tests skip.
   `provider_credentials_destination_uq`) since `0018`.
 - Deferred FK `external_interactions.publication_id` →
   `publications.id` (created by `0009`).
+- **Known deviation (CP-F-02, OPEN):** `interaction_responses.
+destination_id` carries `ON DELETE SET NULL` (schema line 51,
+  migration 0011 line 58) where contract §5.41 mandates `ON DELETE
+RESTRICT`. No application code deletes destinations; the defect is
+  latent. Corrective migration proposed in WP-1 — unimplemented.
 
 ### Repositories implemented
 
-There are **16 repository classes** currently exported by
-`packages/database/src/repositories/index.ts`.
+There are **19 repository classes** in
+`packages/database/src/repositories/` (the prior "16" and README's
+"15" are stale — CP-F-15).
 
 #### Webhook / outbox / destination
 
@@ -1012,19 +1344,21 @@ There are **16 repository classes** currently exported by
 - `InteractionModerationActionsRepository`.
 - `InteractionResponseReconciliationsRepository`.
 
+#### Platform / observability
+
+- `SystemConfigRepository` — typed `system_config` reads.
+- `NotificationsRepository`.
+- `SystemLogsRepository`.
+
 All repository integration tests with a database dependency run
 against Neon PostgreSQL when `TEST_DATABASE_URL` is configured.
 
-**Wiring gap.** `WebhookSubscriptionHealthRepository` and
-`InteractionModerationActionsRepository` are **not yet wired into
-`apps/worker/src/index.ts`**. This means:
-
-- `webhook_subscription_health` rows are not written by the worker.
-- Interaction moderation decisions are not persisted to
-  `interaction_moderation_actions`.
-
-Both are targeted fixes; the repository implementations exist and are
-tested in isolation.
+**Wiring status (updated 2026-10-09).** `WebhookSubscriptionHealth`
+writes are **wired** into `webhook.process` since `7fe1e1e`
+(`apps/worker/src/index.ts:107,213`). `InteractionModerationActions`
+remains **unwired**: moderation decisions are not persisted to
+`interaction_moderation_actions`. Both repository implementations
+exist and are tested in isolation.
 
 ### Platform primitives
 
@@ -1044,7 +1378,8 @@ tested in isolation.
   auto-detection and `family: 4` for Windows + Upstash compatibility.
 - `sql` re-exported from `@content-platform/database`, keeping the
   `drizzle-orm` peer-resolution boundary inside the database package.
-- `WebhookProcessService` — parse and materialize webhook events.
+- `WebhookProcessService` — parse and materialize webhook events;
+  writes `webhook_subscription_health`.
 - `ChangeExtractorRegistry` — field-specific `feed` and `mention`
   extractors.
 - `InteractionResponseService` — policy + template + moderation
@@ -1069,7 +1404,7 @@ tested in isolation.
 - `PublicationReconcileWorker` — `publication.reconcile` queue
   consumer.
 - `PublicationSchedulerService` — due/stale publication orchestration;
-  atomic claim + outbox enqueue per scan.
+  atomic claim + outbox enqueue per scan; credential-health gate.
 - `PublicationSchedulerWorker` — polling wrapper around the scheduler
   service.
 - `InteractionResponseSchedulerService` — SCHEDULED and stale
@@ -1107,26 +1442,25 @@ Meta POST (HTTPS)
   → InteractionResponseService
 ```
 
-The `GET /api/v1/webhooks/meta` handshake is implemented with dual-read
-semantics:
+The `GET /api/v1/webhooks/meta` handshake is **endpoint-only** since
+migration 0017 (`apps/api/src/routes/webhooks/meta.ts:114-117`):
 
 1. `hub.mode` must be `subscribe`; `hub.verify_token` and
    `hub.challenge` are required.
-2. **Endpoint-first path:** all `webhook_endpoints` rows where
-   `provider = 'META' AND status = 'ACTIVE'` are loaded and decrypted
-   with AAD `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`.
-3. **Subscription fallback:** all `webhook_subscriptions` rows where
-   `provider = 'META' AND status = 'ACTIVE'` are loaded and decrypted
-   with AAD `META:WEBHOOK_VERIFY_TOKEN:<destination_id>`.
-4. Ciphertext format is `v1:base64(iv ‖ ciphertext ‖ tag)` using
+2. All `webhook_endpoints` rows where `provider = 'META' AND status =
+'ACTIVE'` are loaded and decrypted with AAD
+   `META:WEBHOOK_VERIFY_TOKEN:<endpoint_id>`.
+3. Ciphertext format is `v1:base64(iv ‖ ciphertext ‖ tag)` using
    AES-256-GCM.
-5. On match, `last_verified_at` is updated on the matched record and
+4. On match, `last_verified_at` is updated on the matched endpoint and
    `hub.challenge` is returned as plain text.
-6. On mismatch, HTTP 403 is returned.
+5. On mismatch, HTTP 403 is returned.
 
-After the `0018` migration, the endpoint path is the only remaining
-path in the schema; the subscription-scoped AAD remains valid only for
-the migration window.
+The dual-read fallback (subscription-scoped decryption, commit
+`cb9fcee`) existed during the migration window and was removed after
+0017 dropped the subscription token columns. The prior HANDOFF
+revision still described the dual-read as current (corrected here;
+CP-F-14).
 
 ### Outbound publication pipeline --- COMPLETE, VERIFIED
 
@@ -1232,7 +1566,15 @@ Worker boot log (verified 2026-10-05):
 | GET    | `/health`               | Liveness                                           |
 | GET    | `/ready`                | Readiness with DB health check                     |
 | POST   | `/api/v1/webhooks/meta` | Webhook ingress (signature + transaction + outbox) |
-| GET    | `/api/v1/webhooks/meta` | Meta `hub.challenge` handshake                     |
+| GET    | `/api/v1/webhooks/meta` | Meta `hub.challenge` handshake (endpoint-only)     |
+
+There is **no user authentication/authorization** anywhere in
+`apps/api` (CONFIRMED 2026-10-09: the only auth-related code is
+webhook signature verification and token decryption). This is
+consistent with the current scope (webhook ingress + health probes;
+the admin UI does not exist yet). It must be revisited before any
+mutating operator-facing API is added. This answers the historical
+Q8-style concern as: intentional today, not a certified boundary.
 
 ### Cloud services
 
@@ -1249,89 +1591,94 @@ future environments.
 
 ### Toolchain
 
-- Node.js **22.20.0** (pinned in `.nvmrc`).
+- Node.js **22.x** (pinned in `.nvmrc`; v22.21.0 observed 2026-10-09).
 - pnpm **12.3.4** (pinned via `packageManager`).
-- TypeScript **7.0.2** (pinned in `package.json` and
-  `pnpm-workspace.yaml`).
+- TypeScript **5.9.3** (pinned in `package.json` and
+  `pnpm-workspace.yaml`; downgraded from 7.0.2 by `28ffa40`).
 - Drizzle ORM **0.45.2**, Drizzle Kit **0.31.10**.
 - BullMQ **5.34.0**, ioredis **5.4.2**.
 - Fastify **5.2.0**, Zod **3.24.1**.
 - Vitest **5.0.0**.
-- ESLint **10.10.0**, Prettier **3.9.6**.
+- ESLint **10.10.0**, Prettier **3.9.6**, typescript-eslint **8.70.0**.
+
+**CI (`.github/workflows/ci.yml`):** install (frozen lockfile) →
+format:check → typecheck → test; `permissions: contents: read`;
+concurrency cancel; Node via `.nvmrc`; `TEST_DATABASE_URL` /
+`TEST_REDIS_URL` from secrets. **Lint and build steps are absent**
+(CP-F-05); the header comment (lines 12-19) still claims the obsolete
+TS 7.0.2/typescript-eslint incompatibility. The lint step is to be
+re-enabled only per the WP-6 → WP-3 → WP-8 → WP-7 sequence.
+
+**Lint baseline at HEAD (regenerated 2026-10-09):** 138 messages =
+118 errors + 20 warnings across 209 files; 14 are fatal parse errors
+on the `.mjs` operational scripts (CP-F-04, configuration defect);
+exactly one genuine production-code finding
+(`preserve-caught-error`, `apps/worker/src/config.ts:89`); the rest are
+test-file findings (three), test-mock `require-await` (73),
+interface-preserving `require-await` (9), auto-fixables (12), unused
+vars (6), and warnings (20). The full baseline is reproducible with
+`pnpm lint`.
 
 ### Documentation
 
-- `README.md`
-- `HANDOFF.md` — this file
+- `README.md` — stale in badges, counts, and versions (drift register
+  above; WP-9).
+- `HANDOFF.md` — this file.
 - `docs/README.md`
-- `docs/adr/` — Architecture Decision Records
+- `docs/adr/` — Architecture Decision Records.
 - `docs/architecture/README.md`
-- `docs/architecture/system-overview.md`
-- `docs/architecture/domain-model.md`
-- `docs/architecture/data-model.md`
-- `docs/architecture/TECHNICAL_SPECIFICATION.md`
-- `docs/architecture/DATABASE_SCHEMA_CONTRACT.md` — **v1.3.1 final**
-- `docs/architecture/LOGICAL_MODEL_SPECIFICATION.md` — status
-  unconfirmed
+- `docs/architecture/system-overview.md` — stale per drift register
+  (44-table era; WP-9).
+- `docs/architecture/domain-model.md` — stale per drift register.
+- `docs/architecture/data-model.md` — stale per drift register.
+- `docs/architecture/TECHNICAL_SPECIFICATION.md` — v0.9.0; header
+  claims "TypeScript 7.0"; supersessions recorded in the contract
+  header (§136 et al.).
+- `docs/architecture/DATABASE_SCHEMA_CONTRACT.md` — **v1.3.1 final**;
+  one internal inconsistency (CP-F-12).
+- `docs/architecture/LOGICAL_MODEL_SPECIFICATION.md` — **v1.0, Status
+  Final** (presence and status confirmed 2026-10-09).
 - `docs/architecture/META_INTEGRATION_SPECIFICATION.md` — v1.4,
-  partially superseded by v1.3.1
+  baseline DB v1.2; partially superseded by v1.3.1 (§5, §48 per the
+  contract header; §9.8, §36, §52, §2.2 per the drift register).
 - `docs/conventions/`
 - `docs/operations/README.md`
-- `docs/operations/local-development.md`
+- `docs/operations/local-development.md` — stale per drift register.
 - `docs/operations/meta-app-setup.md`
+- `docs/operations/typescript-7-0-2-to-5-9-3-downgrade-runbook-content-platform.md`
+  — the downgrade runbook (validation matrix partially outdated:
+  test/format:check now PASS per this snapshot).
 - `docs/planning/v1-3-development-plan-2026-10-04.md` — superseded
-  by the v1.3.1 contract
+  by the v1.3.1 contract.
 - `docs/audit/baseline-audit-2026-09-20.md`
 - `docs/audit/sprint-audit-2026-10-03.md`
-- `docs/audit/v1-3-readiness-audit-2026-10-04.md`
+- `docs/audit/v1-3-readiness-audit-2026-10-04.md` (+ its work order)
 
 ---
 
 ## Pending items
 
-### 1. `WebhookSubscriptionHealth` and `InteractionModerationActions` wiring
+### 1. Wiring gaps (revised 2026-10-09)
 
-Both repositories exist and are tested in isolation but are **not yet
-wired into `apps/worker/src/index.ts`**:
-
-- `WebhookSubscriptionHealthRepository` — the
-  `webhook_subscription_health` table is not written by the worker.
-  The v1.2 F11 fix ("storage now, use later") currently has no
-  writer, so "storage" is incomplete.
-- `InteractionModerationActionsRepository` — interaction moderation
+- `WebhookSubscriptionHealth` — **RESOLVED** by `7fe1e1e`: health
+  rows are written from `webhook.process`
+  (`apps/worker/src/index.ts:107,213`;
+  `webhook-process-service.ts`).
+- `InteractionModerationActions` — **OPEN**: the repository exists
+  and is tested, but it is not wired into the worker bootstrap
+  (confirmed absent from `apps/worker/src/index.ts`), so moderation
   decisions are not persisted to `interaction_moderation_actions`.
-  The `WebhookRespondService` performs moderation but does not write
-  the decision.
+  Targeted fix: wire into `WebhookRespondService` (or
+  `InteractionResponseService`).
 
-Both are targeted fixes. The repository implementations are correct
-and tested; the wiring must be added to the worker bootstrap and the
-relevant services.
+### 2. TypeScript downgrade for ESLint compatibility — RESOLVED
 
-### 2. TypeScript downgrade for ESLint compatibility
-
-`pnpm lint` fails at module load because the project pins
-TypeScript `7.0.2` (in `pnpm-workspace.yaml`) and
-`typescript-eslint@8.70.0` does not yet support the TS 7 compiler
-API. The failure is:
-
-```text
-typescript-eslint does not support TS 7.0.
-Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0
-```
-
-Tracked upstream at
-[typescript-eslint#10940](https://github.com/typescript-eslint/typescript-eslint/issues/10940).
-
-The CI workflow (`.github/workflows/ci.yml`) intentionally does
-not run the lint step for this reason. The other checks —
-`pnpm format:check`, `pnpm typecheck`, `pnpm test` — remain in CI
-and protect the `main` branch.
-
-**Recommended resolution:** downgrade TypeScript to 6.x. The
-language is identical; TS 7 is a compiler rewrite. All tooling
-(typescript-eslint, tsx, drizzle-kit, tsc) is compatible with
-both. The downgrade touches `package.json`, `pnpm-workspace.yaml`,
-`pnpm-lock.yaml`, and `.github/workflows/ci.yml`.
+Resolved by `28ffa40` + `83a5e9e`: TypeScript 5.9.3 everywhere,
+typescript-eslint 8.70.0 operational, typecheck and unit-test gates
+green at HEAD (2026-10-09). Remaining from the runbook's validation
+matrix: `pnpm build` and `pnpm install --frozen-lockfile` were not
+re-executed this session (read-only constraints) and remain formally
+pending; CI lint re-enable is WP-7; PR/merge is owner decision #4.
 
 ### 3. Meta credential fallback removal — v1.3 F5a
 
@@ -1356,12 +1703,10 @@ trust level as an application value. A dedicated database column
 should only be introduced when the reputation subsystem defines the
 authoritative source.
 
-### 5. `LOGICAL_MODEL_SPECIFICATION.md` status
+### 5. `LOGICAL_MODEL_SPECIFICATION.md` status — RESOLVED
 
-The documentation references
-`docs/architecture/LOGICAL_MODEL_SPECIFICATION.md`. Its presence and
-version/status should be explicitly verified before treating the
-logical model as confirmed.
+`docs/architecture/LOGICAL_MODEL_SPECIFICATION.md` is present, v1.0,
+Status Final (confirmed 2026-10-09). No supersession indicators.
 
 ### 6. Secret rotation
 
@@ -1378,28 +1723,34 @@ Meta Webhook callback configuration therefore has to be updated after
 a restart. For stable long-running development, use a fixed public
 HTTPS endpoint or a static ngrok domain.
 
-### 8. Documentation drift reconciliation
+### 8. Documentation drift reconciliation — EXPANDED
 
-The v1.3.1 contract explicitly supersedes statements in
-`TECHNICAL_SPECIFICATION.md` v0.9.0 (§136) and
-`META_INTEGRATION_SPECIFICATION.md` v1.4 (§5, §48). Additional drift
-identified by follow-up audits affects:
+Concrete items (all CONFIRMED 2026-10-09; full register in the
+findings section):
 
-- `META_INTEGRATION_SPECIFICATION.md` §9.8 (handshake description),
-  §36 Layer 2 (natural key), §52 (baseline declaration), §2.2
-  (version history).
-- `TECHNICAL_SPECIFICATION.md` §84 (44-table inventory), §84.7
-  (`webhook_subscriptions` columns), §84.11 (natural key), §84.12
-  (`provider_credentials` COALESCE), §140.2 (handshake), §145
-  (invariant 15), §147 (source-of-truth hierarchy).
-- `docs/architecture/data-model.md`, `docs/architecture/domain-model.md`,
-  `docs/architecture/README.md`, `docs/architecture/system-overview.md`
-  (44→45 tables, missing `webhook_endpoints`, v1.2 natural key).
-- `docs/adr/ADR-002-outbox-pattern.md` (BullMQ dedup overstatement,
-  §5.43 → §5.45), `docs/adr/ADR-005-health-separation.md` (§5.44 →
-  §5.36).
-- `docs/operations/local-development.md` (migration count, test count,
-  legacy encryption key format).
+- `README.md`: badges (`typescript-7.0`, `tests-251 passing`),
+  structure counts (44 tables / 15 repos / 15 migrations),
+  documentation map (contract v1.2), project status (v1.3 as Next),
+  workspace table (251).
+- `HANDOFF.md` prior revision: header, toolchain, pending #2, TS7
+  trap, handshake paragraph, counts — all corrected by this revision.
+- `DATABASE_SCHEMA_CONTRACT.md` §5.41: status vocabulary contradicts
+  §56.1 and the schema (CP-F-12) — contract amendment.
+- `interaction-responses.ts:40`: cross-reference §5.39 → §5.41
+  (CP-F-13).
+- `TECHNICAL_SPECIFICATION.md` v0.9.0: header "Language: TypeScript
+  7.0"; v1.2 alignment (§136, §84 et al. superseded per the contract
+  header).
+- `META_INTEGRATION_SPECIFICATION.md` v1.4: §9.8, §36 Layer 2, §52,
+  §2.2 (drift list from the v1.3.1 note).
+- `docs/architecture/data-model.md`, `domain-model.md`, `README.md`,
+  `system-overview.md`: 44→45 tables, missing `webhook_endpoints`,
+  v1.2 natural key.
+- `docs/adr/ADR-002-outbox-pattern.md` (BullMQ dedup overstatement),
+  `docs/adr/ADR-005-health-separation.md` (section renumbers).
+- `docs/operations/local-development.md` (migration count, test
+  count, legacy encryption key format).
+- `.github/workflows/ci.yml` header comment (CP-F-05).
 
 The minimal reconciliation is a "v1.3.1 compatibility note" at the top
 of each affected document that lists the superseded statements and
@@ -1410,44 +1761,50 @@ can proceed in parallel or later.
 
 ## Next steps
 
-### Primary: two targeted wiring fixes
+### 0. Owner decisions (blocking)
 
-1. Wire `WebhookSubscriptionHealthRepository` into
-   `WebhookProcessService` (or `WebhookEventsRepository`'s
-   successful-processing path) so that `webhook_subscription_health`
-   rows are written on delivery outcomes.
-2. Wire `InteractionModerationActionsRepository` into
-   `WebhookRespondService` (or `InteractionResponseService`) so that
-   moderation decisions are persisted to
-   `interaction_moderation_actions`.
+1. CP-F-01: implement §20 Path A protocol vs formally amend the
+   contract. (Blocks WP-2 and production-upgrade eligibility.)
+2. CP-F-02: sign-off on WP-1 (contract-mandated RESTRICT correction).
+3. WP-8: approve test-file lint-rule scoping policy.
+4. Merge strategy for `chore/downgrade-typescript-5.9.3`.
 
-Both fixes are small, isolated, and testable.
+### Primary: lint chain (WP-6 → WP-3 → WP-8 → WP-7)
 
-### Secondary: TypeScript downgrade
+1. WP-6: add the two scripts tsconfigs + the scoped `no-undef` block
+   (specification in the findings register). Zero fatal parse errors;
+   error count drops by exactly 14 modulo drift.
+2. WP-3: attach `cause` at `apps/worker/src/config.ts:89`.
+3. WP-8 (after policy approval): config-scope the test-file rules;
+   triage the three test-file findings.
+4. WP-7: add `pnpm lint` and `pnpm build` to CI; delete the obsolete
+   header comment.
 
-Downgrade TypeScript from `7.0.2` to `6.x` in `package.json` and
-`pnpm-workspace.yaml`, regenerate `pnpm-lock.yaml`, re-enable the
-`pnpm lint` step in `.github/workflows/ci.yml`, and close pending item
-#2.
+### Secondary: correctness and validation
 
-### Tertiary: documentation drift reconciliation
+5. WP-1: CP-F-02 corrective schema + migration 0019 (dev DB only,
+   after backup; never production under the CP-F-01 do-not-run
+   condition).
+6. WP-4: CI Postgres/Redis service containers so the 98 skipped tests
+   execute on PRs (ephemeral databases only — 13 test files TRUNCATE).
+7. WP-5: runtime/E2E re-verification (real inbound webhook, real
+   outbound publication, DB-gated suites on an ephemeral DB).
 
-Apply the "v1.3.1 compatibility notes" to the affected higher-level
-documents (pending item #8). This unblocks the v1.3.2 development plan
-and removes the ambiguity about which document is authoritative for the
-v1.3.1 schema.
+### Tertiary: documentation (WP-9)
 
-### Quarterly: production Path A
+Apply the drift register: README refresh, contract §5.41 amendment
+(CP-F-12), cross-ref fix (CP-F-13), TECH/META compatibility notes,
+CI-generated revision-bound lint/test artifacts.
 
-If a populated v1.2 production database ever needs to migrate to
-v1.3.1, the full four-phase protocol from `DATABASE_SCHEMA_CONTRACT.md`
-v1.3.1 §20 must be implemented: Compatibility Bridge deployment, Hard
-Gate #1 (SERIALIZABLE data validation + concurrent index catalog
-validation + preservation evidence), Hard Gate #2, `0018 CONTRACT`
-completion, partial-0016 recovery contract, immutable pre-migration
-preservation baseline, and canonical-JSON preservation digest per
-§2.8. The current migration chain (`0015`–`0017` plus `0018`) reaches
-the same target state but does not implement the governance layer.
+### Quarterly: production Path A (WP-2)
+
+Only after owner decision #1. If "implement": full §20 protocol
+(Compatibility Bridge, Hard Gates #1/#2, advisory-lock runner,
+preservation baseline + §2.8 digests, §20.2.9 state machine),
+rehearsal on a restored production-shaped copy, concurrent-runner
+testing, and explicit human authorization before any populated
+database is touched. If "amend": contract amendment + separately
+scoped future production protocol.
 
 ---
 
@@ -1491,9 +1848,6 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
     before the migration is written. The contract is the source of
     truth; migrations are generated from it. The v1.3.1 contract is
     the current level-3 baseline.
-
-### Additional invariants introduced by the v1.3.1 contract
-
 16. The App-level webhook verify token is owned by
     `webhook_endpoints`. No per-subscription duplication.
 17. The target-state authoritative verify-token AAD is
@@ -1503,7 +1857,13 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
     `(provider, external_interaction_id)`, enforced by a
     **UNIQUE INDEX** (`external_interactions_provider_external_id_uq`).
 19. `interaction_responses.destination_id` is `NOT NULL` with
-    `ON DELETE RESTRICT`.
+    `ON DELETE RESTRICT`. **Implementation deviation (CP-F-02, OPEN):**
+    the current schema and migration 0011 carry `ON DELETE SET NULL`,
+    which contradicts this invariant and the contract §5.41 rationale;
+    every deletion of a referenced destination fails at runtime. The
+    corrective change is specified in WP-1 (unimplemented). Until it
+    lands, treat this invariant as violated-by-implementation and do
+    not attempt destination deletions.
 20. `webhook_subscriptions.fields` is non-empty
     (`CHECK (cardinality(fields) > 0)`).
 21. Exactly one Meta App per deployment.
@@ -1527,15 +1887,24 @@ SKIP LOCKED` claim semantics. No scheduler scan may enqueue
 30. Multi-user access control within a shared deployment scope; no
     tenant isolation.
 
+Invariants 24, 25, 26, 28, and 29 (this document's numbering;
+contract [INVARIANT-08], [INVARIANT-14], [INVARIANT-19], [INVARIANT-20],
+and [INVARIANT-22] respectively) are fully enforced only under the
+§20 Path A protocol, which is unimplemented (CP-F-01). The
+Compatibility Bridge requirement (contract [INVARIANT-05], §20) is
+Path A-only as well; this document's invariant list does not restate
+it. For the dev-DB path actually in the repository, the operative
+safeguards are the idempotent backfill and 0017's DO-block guard.
+
 ---
 
 ## Known patterns and traps
 
-These are lessons learned during Phases 14–19e and v1.3.1
-finalization. They are captured here so the next session does not
-re-encounter them.
+These are lessons learned during Phases 14–19e, v1.3.1 finalization,
+and the 2026-10-09 audit reconciliation. They are captured here so the
+next session does not re-encounter them.
 
-### `describe.skipIf(!TEST_DB_URL)` silently skips DB tests
+### `describe.skipIf(!TEST_DB_URL)` silently skips DB tests — and a green run is not integration evidence
 
 The DB- and Redis-backed integration tests use the
 `describe.skipIf(!TEST_DB_URL)` pattern. When the environment
@@ -1543,14 +1912,48 @@ variable is absent, the entire test file is skipped without any
 warning in the standard test output.
 
 The consequence: a default `pnpm test` run without
-`TEST_DATABASE_URL` reports "green" while silently omitting half
-the suite. The CI pipeline provides `TEST_DATABASE_URL` and
-`TEST_REDIS_URL` via repository secrets, so the CI runs the full
-suite; local developers must export the env vars explicitly.
+`TEST_DATABASE_URL` reports "green" while silently omitting 98 of 270
+tests (measured 2026-10-09), including the whole `packages/database`
+and `apps/api` suites. **Never cite a passing env-unset run as
+evidence that the integration tests pass.** The CI pipeline provides
+`TEST_DATABASE_URL` and `TEST_REDIS_URL` via repository secrets (CI
+execution itself not re-inspected 2026-10-09); local developers must
+export the env vars explicitly, pointed at disposable databases only.
 
 When adding new integration tests, add the same pattern and remember
-that a "passing" local run without the env vars does not exercise
-the new tests.
+that a "passing" local run without the env vars does not exercise the
+new tests.
+
+### DB integration tests TRUNCATE — ephemeral databases only
+
+13 test files issue `TRUNCATE ... RESTART IDENTITY CASCADE` fixtures
+(CONFIRMED by grep on 2026-10-09), including
+`apps/api/src/routes/webhooks/meta.test.ts`. These tests must never
+run against a shared, staging, or production database. CI isolation
+must use per-job service containers (WP-4).
+
+### `drizzle-kit check` is not contract-conformance evidence
+
+`drizzle-kit check` validates the migration journal/snapshot chain.
+It says nothing about the v1.3.1 contract's §20 governance
+requirements (Bridge, Hard Gates, advisory lock, baseline, digests).
+A "check passes" result must never be cited against CP-F-01.
+
+### typescript-eslint `allowDefaultProject` is capped at eight files
+
+The installed typescript-eslint 8.70.0 hard-caps files matched into
+the default project at 8 (`Too many files (>8) have matched the
+default project`); the only override is a flag explicitly named
+`maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING`.
+For the 14 operational `.mjs` scripts, use dedicated per-directory
+tsconfigs instead (WP-6). Do not reach for the cap override.
+
+### A lint "fatal parse error" storm usually means project coverage, not source rot
+
+The 14 fatal `.mjs` errors at HEAD are a single configuration gap:
+`projectService: true` without any project covering the scripts
+directories. Fix coverage (WP-6); do not "fix" the scripts, and do
+not exclude the directories from linting.
 
 ### Prettier must run after any script-driven markdown edit
 
@@ -1769,165 +2172,6 @@ Long PostgreSQL foreign-key identifiers can be truncated to the
 63-character identifier limit. This is informational when the
 generated migration is otherwise correct.
 
-### Publication reconciliation is bounded pull-based fallback
-
-The publication reconciliation path is not the primary success path.
-
-The normal success path is:
-
-```text
-Meta Graph API response
-  → publication attempt result
-  → publications.status = PUBLISHED
-```
-
-When the external outcome is uncertain, the publication enters
-`RECONCILIATION` and the bounded pull reconciler investigates the
-destination Page feed. Independently, an inbound Meta feed webhook can
-provide push confirmation of the platform's own outbound publication.
-
-Therefore:
-
-- **primary confirmation:** the outbound publication attempt;
-- **push confirmation:** inbound Meta feed webhook;
-- **pull reconciliation:** bounded fallback for uncertain outcomes.
-
-`MetaPublicationReconciler` is not intended to replace the publication
-attempt or become the normal success path.
-
-### Push reconciliation must not enter interaction policy
-
-When `WebhookProcessService` receives a feed interaction whose actor
-is the destination Page itself, it represents the platform's own
-outbound action. That event must be handled as reconciliation and must
-not continue into the normal interaction policy decision path.
-
-### The publication scheduler must be idempotent across runs
-
-The scheduler does not own the durable state; it only discovers and
-enqueues. The `FOR UPDATE SKIP LOCKED` claim guarantees at-most-once
-claiming across concurrent scheduler instances, and the transition
-itself (`SCHEDULED → RESERVED` or `updated_at = now()`) removes the
-row from the next scan's window. A repeated `runOnce()` on the same
-set of rows must yield zero additional outbox rows.
-
-### BullMQ `jobId` dedup across all job states
-
-BullMQ deduplicates `queue.add()` by `jobId` **across every job
-state**: `waiting`, `active`, `delayed`, `completed`, `failed`. If a
-job with the same `jobId` still exists in Redis in any state, the
-`add()` call is a silent no-op.
-
-This matters because the outbox pattern uses deterministic `jobId`
-values (`content.publish:{publicationId}`, etc.) so that a recovered
-outbox row produces the same job on re-enqueue. If the previous job
-is still retained as `completed`, the recovery silently fails: the
-outbox row is marked `DISPATCHED` (the `add()` did not throw), but no
-BullMQ job is created, and the worker never picks the work up.
-
-**The correct configuration is:**
-
-```typescript
-defaultJobOptions: {
-  removeOnComplete: true,
-  removeOnFail: false,
-}
-```
-
-- `removeOnComplete: true` removes the job immediately when it
-  completes, so the `jobId` becomes reusable.
-- `removeOnFail: false` keeps failed jobs for inspection. A failed
-  job still blocks re-enqueue with the same `jobId`; this is
-  deliberate, because failed jobs are exceptional and require
-  investigation rather than silent retry.
-
-The durable history of every external side effect already lives in
-the database (`publication_attempts`, `webhook_deliveries`,
-`interaction_response_attempts`,
-`interaction_response_reconciliations`). Nothing is lost by removing
-completed jobs immediately.
-
-**Diagnostic:**
-
-When a `DISPATCHED` outbox row produces no worker activity, inspect
-the BullMQ queue state:
-
-```bash
-export REDIS_URL="$(grep '^REDIS_URL=' .env | cut -d= -f2-)"
-node apps/worker/scripts/inspect-bullmq.mjs content.publish "content.publish:{publicationId}"
-```
-
-If the specific job shows `state=completed`, the dedup trap is
-active. If the queue is empty and the job is `NOT FOUND`, the
-dispatcher never successfully enqueued (or the job was already
-removed).
-
-### Publication `RESERVED` is a valid pre-execution state
-
-The 19d scheduler transitions `SCHEDULED → RESERVED` before enqueuing
-`content.publish`. Any worker guard that gates execution on the
-publication status must include `RESERVED` in the eligible set,
-alongside `SCHEDULED` (direct enqueue / `system.rebuild`) and `RETRY`
-(re-enqueue after transient failure).
-
-The `IN_PROGRESS` transition must be a single atomic claim
-(`claimForPublishing`) with a status predicate in the `WHERE` clause.
-Two separate unguarded updates are not sufficient.
-
-### Drizzle snapshot chain breaks with seed-only migrations
-
-Every `_journal.json` entry must have a matching
-`NNNN_snapshot.json`, even when the migration contains only data
-changes (INSERTs) and no DDL. Without it, the next `drizzle-kit
-generate` fails because the tool cannot find a `prevId` anchor for
-the new snapshot.
-
-The fix is to copy the previous snapshot, assign a new `id`, and
-set `prevId` to the previous snapshot's `id`. Two seed-only
-migrations needed this treatment in Sprint C:
-`0013_seed_system_config` and `0014_seed_rate_limit_budgets`.
-
-Verification: after the fix,
-
-```bash
-pnpm --filter @content-platform/database exec drizzle-kit generate
-```
-
-must print `No schema changes, nothing to migrate`. If it produces
-a new `NNNN_*.sql` file, the snapshot chain is not consistent with
-the Drizzle schema definitions, and the new files must be removed
-before continuing.
-
-### GitHub Actions runner allocation can fail during incidents
-
-The GitHub-hosted runner pool can be temporarily unavailable during
-GitHub-side incidents. The symptom is a workflow run that stays in
-`Queued` for an unusually long time and then fails with:
-
-```text
-Internal server error. Correlation ID: ...
-The job was not acquired by Runner of type hosted even after multiple attempts
-```
-
-This is **not** a repository defect. The job never started. Check
-<https://www.githubstatus.com/> for an active incident. When the
-incident is resolved, re-run the workflow from the run page.
-
-Do not push additional commits to work around the incident — that
-only adds more queued runs.
-
-### TypeScript 7 + ESLint compatibility
-
-The project pins TypeScript 7.0.2. `typescript-eslint@8.70.0` does not
-yet support the TS 7 compiler API. `pnpm lint` fails at module load:
-
-```text
-typescript-eslint does not support TS 7.0.
-```
-
-The CI workflow intentionally excludes the lint step. See pending
-item #2 for the recommended resolution (downgrade to TS 6.x).
-
 ---
 
 ## Source-of-truth hierarchy
@@ -1942,14 +2186,61 @@ item #2 for the recommended resolution (downgrade to TS 6.x).
 
 Any change to the physical schema requires revising the higher-level
 contract first. The v1.3.1 contract is the current level-3 baseline
-and is **final**.
+and is **final** (presence, version, and status re-confirmed
+2026-10-09; invariant 15 in this document).
 
 The v1.3.1 contract explicitly supersedes statements in:
 
-- `TECHNICAL_SPECIFICATION.md v0.9.0 §136`
-- `META_INTEGRATION_SPECIFICATION.md v1.4 §5`
-- `META_INTEGRATION_SPECIFICATION.md v1.4 §48`
+- `TECHNICAL_SPECIFICATION.md v0.9.0 §136` — `webhook_endpoints` and
+  the provider-aware natural key are in scope for v1.3, not Post-MVP.
+- `META_INTEGRATION_SPECIFICATION.md v1.4 §5` — `webhook_endpoints`
+  is not an explicit non-goal.
+- `META_INTEGRATION_SPECIFICATION.md v1.4 §48` — the provider-aware
+  natural key is in scope, not future.
 
-Additional drift in the higher-level documents (identified by
-follow-up audits) must be reconciled via compatibility notes or
-§-level revisions before the v1.3.2 development plan is finalized.
+These supersessions are recorded in the contract header (contract
+lines 48-56), which additionally directs that the higher-level
+documents be revised to contract §5.34, §5.39, §5.35, and §23.4.
+
+Additional drift in the higher-level documents — 44→45 tables, the
+missing `webhook_endpoints`, the v1.2-era natural key, stale headers
+and counts — is registered in the documentation drift register above
+and is reconciled through WP-9 (compatibility notes first, §-level
+revisions in parallel or later). Until that reconciliation lands,
+this hierarchy — not the stale higher-level documents — adjudicates
+any conflict about the physical persistence model.
+
+---
+
+## Document integrity note
+
+**Provenance.** This revision of the handoff document was produced by
+the 2026-10-09 comprehensive engineering audit (external, strictly
+read-only) and the follow-up local read-only reconciliation session.
+Every check cited in this document was executed against the
+checked-out repository at HEAD `83a5e9e` on branch
+`chore/downgrade-typescript-5.9.3`; no repository file, Git object,
+GitHub state, database, or Redis instance was modified at any point.
+The only write target for the audit and reconciliation outputs is
+this file, outside the repository.
+
+**Required-section verification (executed at completion of this
+note, 2026-10-10):**
+
+- Findings register CP-F-01 through CP-F-15 — all 15 present, each
+  with severity, status, and file/line evidence.
+- Work packages WP-1 through WP-9 — all 9 present in the
+  dependency-aware roadmap table.
+- Architectural invariants — all 30 present, numbered 1-30, with the
+  Path A enforcement caveat recorded after invariant 30.
+- Source-of-truth hierarchy — present as the section immediately
+  preceding this note.
+- Document integrity note — this section.
+
+**Document metrics:** 2246 lines, 135711 bytes (measured
+2026-10-10, after final write of this note).
+
+**Consistency binding.** If any count, status, or line reference in
+this document is found to disagree with the repository at HEAD
+`83a5e9e`, the repository evidence prevails and this document must be
+regenerated, not patched piecemeal.

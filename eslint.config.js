@@ -45,4 +45,19 @@ export default tseslint.config(
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    // Operational .mjs scripts (packages/database/scripts, apps/worker/scripts).
+    // Type-aware linting is provided by the dedicated scripts tsconfigs in
+    // those directories, discovered automatically by the project service.
+    // Node globals (process, console, ...) resolve through @types/node in each
+    // scripts project, making the core no-undef rule redundant here — the same
+    // rationale typescript-eslint's eslint-recommended applies to typed files.
+    // Do NOT replace these tsconfigs with projectService.allowDefaultProject:
+    // typescript-eslint 8.70.0 hard-caps default-project matches at 8 files
+    // and 14 operational scripts exist.
+    files: ['**/*.mjs'],
+    rules: {
+      'no-undef': 'off',
+    },
+  },
 );

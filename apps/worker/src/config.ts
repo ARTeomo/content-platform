@@ -86,7 +86,7 @@ function parseCredentialKeys(raw: string | undefined): Record<string, string> | 
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`META_CREDENTIAL_ENCRYPTION_KEYS is not valid JSON: ${msg}`);
+    throw new Error(`META_CREDENTIAL_ENCRYPTION_KEYS is not valid JSON: ${msg}`, { cause: err });
   }
 }
 

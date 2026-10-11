@@ -73,4 +73,13 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-return': 'off',
     },
   },
+  {
+    // Test files: async mocks and test doubles may need to preserve
+    // Promise-returning signatures and rejection timing (owner decision
+    // #3 / HANDOFF WP-8). require-await stays ON for all source files.
+    files: ['**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+    },
+  },
 );

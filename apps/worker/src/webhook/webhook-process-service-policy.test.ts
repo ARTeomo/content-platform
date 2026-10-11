@@ -193,7 +193,7 @@ function build(args: {
       externalResponseId: string,
       respondedAt: Date,
     ): Promise<void> {
-      markRespondedSpy(id, externalResponseId, respondedAt);
+      await markRespondedSpy(id, externalResponseId, respondedAt);
     },
   } as unknown as InteractionResponsesRepository;
 

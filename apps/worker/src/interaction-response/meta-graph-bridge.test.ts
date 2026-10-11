@@ -24,7 +24,7 @@ function stubFetch(responses: StubResponse[] | (() => StubResponse)): {
   const calls: FetchCall[] = [];
   let idx = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
-    const url = typeof input === 'string' ? input : input.toString();
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     calls.push({ url, init: init ?? {} });
     const r = typeof responses === 'function' ? responses() : responses[idx++];
     if (!r) throw new Error('stubFetch: no response configured');

@@ -55,9 +55,22 @@ export default tseslint.config(
     // Do NOT replace these tsconfigs with projectService.allowDefaultProject:
     // typescript-eslint 8.70.0 hard-caps default-project matches at 8 files
     // and 14 operational scripts exist.
+    //
+    // These scripts are intentionally untyped (checkJs: false), so driver
+    // results (postgres.js, ioredis, BullMQ) are `any` by design; the
+    // no-unsafe-* family would fire only on that intended-untyped surface.
+    // Scoped off for .mjs only — never for TypeScript sources. Keep
+    // no-floating-promises ON: it caught a real bug (meta-preflight.mjs).
+    // no-console is the operator-facing output channel of these CLIs.
     files: ['**/*.mjs'],
     rules: {
       'no-undef': 'off',
+      'no-console': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
     },
   },
 );

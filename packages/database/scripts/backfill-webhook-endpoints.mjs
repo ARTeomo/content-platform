@@ -144,7 +144,7 @@ try {
   console.log(`[backfill] distinct (provider, token) groups: ${groups.size}`);
 
   if (DRY_RUN) {
-    for (const [key, group] of groups) {
+    for (const [, group] of groups) {
       console.log(
         `[backfill] DRY RUN: provider=${group.provider} ` +
           `subscriptions=${group.subs.map((s) => s.id).join(', ')}`,
@@ -153,7 +153,7 @@ try {
     process.exit(0);
   }
 
-  for (const [key, group] of groups) {
+  for (const [, group] of groups) {
     const endpointId = randomUUID();
     const name = `app-${group.provider.toLowerCase()}-${endpointId.slice(0, 8)}`;
     const encrypted = encrypt(group.token, endpointId);

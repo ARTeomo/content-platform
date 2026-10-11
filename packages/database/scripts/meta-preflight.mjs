@@ -145,4 +145,7 @@ function line(label, value) {
   }
 
   console.log('PREFLIGHT PASSED.');
-})();
+})().catch((err) => {
+  console.error('PREFLIGHT FAILED:', err);
+  process.exit(1);
+});

@@ -11,11 +11,11 @@ import type { MetaPublishRateLimiter, MetaRateLimiter, RateLimitDecision } from 
  * instance can be injected into both adapters during development.
  */
 export class NoopMetaRateLimiter implements MetaRateLimiter, MetaPublishRateLimiter {
-  async checkEngagement(_destinationId: string): Promise<RateLimitDecision> {
-    return { allowed: true };
+  checkEngagement(_destinationId: string): Promise<RateLimitDecision> {
+    return Promise.resolve({ allowed: true });
   }
 
-  async checkPublish(_destinationId: string): Promise<RateLimitDecision> {
-    return { allowed: true };
+  checkPublish(_destinationId: string): Promise<RateLimitDecision> {
+    return Promise.resolve({ allowed: true });
   }
 }

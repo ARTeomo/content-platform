@@ -19,6 +19,7 @@ function asNumber(v: unknown): number | undefined {
 export class MentionChangeExtractor implements ChangeExtractor {
   readonly field = 'mention';
 
+  // eslint-disable-next-line @typescript-eslint/require-await -- ChangeExtractor contract requires Promise<ExternalInteractionDraft[]>; the registry awaits extract().
   async extract(
     change: MetaWebhookChange,
     context: ChangeExtractionContext,

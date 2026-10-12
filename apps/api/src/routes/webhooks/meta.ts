@@ -29,6 +29,7 @@ interface EndpointRow {
   verify_token_key_version: number;
 }
 
+// eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin contract: register() consumes the async (Promise<void>) plugin signature; this function performs synchronous route registration only.
 export async function metaWebhookRoutes(
   app: FastifyInstance,
   options: MetaWebhookRouteOptions,

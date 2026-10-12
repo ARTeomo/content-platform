@@ -1,7 +1,7 @@
 import {
-  InteractionResponsesRepository,
-  OutboxRepository,
-  TransactionManager,
+  type InteractionResponsesRepository,
+  type OutboxRepository,
+  type TransactionManager,
 } from '@content-platform/database';
 
 export interface InteractionResponseSchedulerServiceDeps {

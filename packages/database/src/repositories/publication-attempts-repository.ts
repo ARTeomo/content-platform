@@ -22,8 +22,7 @@ export class PublicationAttemptsRepository {
       .insert(publicationAttempts)
       .values({
         publicationId,
-        attemptNumber:
-          sql`COALESCE((SELECT MAX(attempt_number) FROM publication_attempts WHERE publication_id = ${publicationId}), 0) + 1` as unknown as number,
+        attemptNumber: sql`COALESCE((SELECT MAX(attempt_number) FROM publication_attempts WHERE publication_id = ${publicationId}), 0) + 1`,
         status: 'PENDING',
         startedAt: new Date(),
       })

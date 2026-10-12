@@ -1,7 +1,7 @@
 import {
-  PublicationAttemptsRepository,
-  PublicationReconciliationsRepository,
-  PublicationsRepository,
+  type PublicationAttemptsRepository,
+  type PublicationReconciliationsRepository,
+  type PublicationsRepository,
   sql,
   type Database,
   type TransactionManager,

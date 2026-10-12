@@ -1,8 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import {
-  webhookSubscriptions,
-  type webhookSubscriptions as ws,
-} from '../schema/webhook/webhook-subscriptions.js';
+import { webhookSubscriptions } from '../schema/webhook/webhook-subscriptions.js';
 import { webhookSubscriptionHealth } from '../schema/webhook/webhook-subscription-health.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 

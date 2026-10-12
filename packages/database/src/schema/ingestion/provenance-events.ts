@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { check, index, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { idColumn } from '../_common.js';
 import { sourceEndpoints } from './source-endpoints.js';
 

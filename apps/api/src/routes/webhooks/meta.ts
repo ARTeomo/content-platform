@@ -86,7 +86,7 @@ export async function metaWebhookRoutes(
           objectType: envelope.object,
           externalObjectId,
           idempotencyKey,
-          rawPayload: envelope as unknown as Record<string, unknown>,
+          rawPayload: envelope,
           rawBodyHash,
           ...(field !== undefined && { field }),
           ...(destinationId !== null && { destinationId }),

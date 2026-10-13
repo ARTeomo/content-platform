@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { sql } from 'drizzle-orm';
 import { createDatabaseClient, type DatabaseClient } from '../client.js';
 import { OutboxRepository } from './outbox-repository.js';
 import { TransactionManager } from '../transaction/transaction-manager.js';
@@ -125,6 +124,6 @@ describe.skipIf(!TEST_DB_URL)('OutboxRepository', () => {
     expect(deleted).toBe(1);
 
     const remaining = await client.sql`SELECT job_id FROM outbox_jobs`;
-    expect(remaining.map((r) => r.job_id)).toEqual(['new']);
+    expect(remaining.map((r) => String(r.job_id))).toEqual(['new']);
   });
 });

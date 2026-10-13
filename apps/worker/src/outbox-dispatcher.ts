@@ -70,9 +70,10 @@ export class OutboxDispatcher {
     this.logger.info('[outbox] dispatcher stopped');
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
     this.stopped = true;
     if (this.recoveryTimer) clearInterval(this.recoveryTimer);
+    return Promise.resolve();
   }
 
   async dispatchOnce(): Promise<number> {

@@ -74,14 +74,14 @@ export class SystemConfigRepository {
       .insert(systemConfig)
       .values({
         key,
-        value: value as unknown,
+        value: value,
         ...(updatedBy !== undefined && { updatedBy }),
         updatedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: systemConfig.key,
         set: {
-          value: value as unknown,
+          value: value,
           ...(updatedBy !== undefined && { updatedBy }),
           updatedAt: new Date(),
         },

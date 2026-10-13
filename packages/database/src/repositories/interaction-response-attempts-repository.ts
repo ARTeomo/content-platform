@@ -25,8 +25,7 @@ export class InteractionResponseAttemptsRepository {
       .insert(interactionResponseAttempts)
       .values({
         responseId,
-        attemptNumber:
-          sql`COALESCE((SELECT MAX(attempt_number) FROM interaction_response_attempts WHERE response_id = ${responseId}), 0) + 1` as unknown as number,
+        attemptNumber: sql`COALESCE((SELECT MAX(attempt_number) FROM interaction_response_attempts WHERE response_id = ${responseId}), 0) + 1`,
         status: 'PENDING',
         startedAt: new Date(),
         requestPayloadHash,

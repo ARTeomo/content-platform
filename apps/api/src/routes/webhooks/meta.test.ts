@@ -12,7 +12,6 @@ const VERIFY_KEY_BYTES = randomBytes(32);
 describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
   let client: DatabaseClient;
   let app: Awaited<ReturnType<typeof buildApp>>;
-  let destinationId: string;
   let encryption: WebhookTokenEncryptionProvider;
 
   beforeAll(async () => {
@@ -35,15 +34,12 @@ describe.skipIf(!TEST_DB_URL)('Meta webhook ingress', () => {
     const existing = await client.sql<{ id: string }[]>`
       SELECT id FROM destinations WHERE external_id = 'test-webhook-ingress'
     `;
-    if (existing[0]) {
-      destinationId = existing[0].id;
-    } else {
-      const [d] = await client.sql<{ id: string }[]>`
+    if (!existing[0]) {
+      await client.sql<{ id: string }[]>`
         INSERT INTO destinations (name, type, external_id)
         VALUES ('Test Webhook Ingress', 'META', 'test-webhook-ingress')
         RETURNING id
       `;
-      destinationId = d!.id;
     }
   });
 

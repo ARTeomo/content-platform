@@ -1,8 +1,8 @@
 import {
-  OutboxRepository,
-  PublicationsRepository,
-  InteractionResponsesRepository,
-  TransactionManager,
+  type OutboxRepository,
+  type PublicationsRepository,
+  type InteractionResponsesRepository,
+  type TransactionManager,
   sql,
   type Database,
 } from '@content-platform/database';

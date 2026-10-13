@@ -1,14 +1,5 @@
 import { sql } from 'drizzle-orm';
-import {
-  check,
-  index,
-  integer,
-  pgTable,
-  text,
-  uniqueIndex,
-  uuid,
-  varchar,
-} from 'drizzle-orm/pg-core';
+import { check, index, integer, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 import { createdAtColumn, idColumn, nullableTimestampColumn, updatedAtColumn } from '../_common.js';
 
 /**

@@ -1,7 +1,7 @@
 import {
-  OutboxRepository,
-  PublicationsRepository,
-  TransactionManager,
+  type OutboxRepository,
+  type PublicationsRepository,
+  type TransactionManager,
 } from '@content-platform/database';
 import type { MetaCredentialService, MetaCredentialStatus } from '@content-platform/authentication';
 import type { AlertingService } from '../observability/index.js';

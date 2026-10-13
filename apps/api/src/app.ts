@@ -26,7 +26,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
   });
 
-  app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/health', () => ({ status: 'ok' }));
   app.get('/ready', async (_req, reply) => {
     const dbOk = await options.client.healthCheck();
     if (!dbOk) return reply.code(503).send({ status: 'unready', database: false });

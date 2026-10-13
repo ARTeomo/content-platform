@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
-  PublicationAttemptsRepository,
-  PublicationsRepository,
+  type PublicationAttemptsRepository,
+  type PublicationsRepository,
   sql,
   type Database,
   type TransactionManager,

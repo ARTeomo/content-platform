@@ -29,8 +29,7 @@ export class WebhookDeliveriesRepository {
       .insert(webhookDeliveries)
       .values({
         webhookEventId: input.webhookEventId,
-        attemptNumber:
-          sql`COALESCE((SELECT MAX(attempt_number) FROM webhook_deliveries WHERE webhook_event_id = ${input.webhookEventId}), 0) + 1` as unknown as number,
+        attemptNumber: sql`COALESCE((SELECT MAX(attempt_number) FROM webhook_deliveries WHERE webhook_event_id = ${input.webhookEventId}), 0) + 1`,
         status: 'PENDING',
         startedAt: new Date(),
         workerId: input.workerId ?? null,

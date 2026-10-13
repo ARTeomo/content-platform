@@ -34,12 +34,13 @@ export class PublicationSchedulerWorker {
     void this.tick();
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
     this.shuttingDown = true;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    return Promise.resolve();
   }
 
   private async tick(): Promise<void> {

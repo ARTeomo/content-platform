@@ -5,8 +5,8 @@
 
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
-[![TypeScript](https://img.shields.io/badge/typescript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tests](https://img.shields.io/badge/tests-251%20passing-brightgreen)](#project-status)
+[![TypeScript](https://img.shields.io/badge/typescript-5.9.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Tests](https://img.shields.io/badge/tests-275%20total-brightgreen)](#project-status)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -153,11 +153,11 @@ content-platform/
 +-- packages/                      Shared libraries
 |   +-- database/                  Drizzle schema, migrations, repositories
 |   |   +-- src/
-|   |   |   +-- schema/            44 tables organized by domain
-|   |   |   +-- repositories/      15 repository classes
+|   |   |   +-- schema/            45 tables organized by domain
+|   |   |   +-- repositories/      19 repository classes
 |   |   |   +-- transaction/       TransactionManager
 |   |   |   +-- client.ts          Database client factory
-|   |   +-- migrations/            0000 - 0014
+|   |   +-- migrations/            0000 - 0018
 |   |   +-- scripts/               Operational scripts
 |   +-- authentication/            Credential encryption + Meta lifecycle
 |   |   +-- src/
@@ -204,7 +204,7 @@ disagree, the higher-level document wins.
 1. Domain and architecture contracts
 2. TECHNICAL_SPECIFICATION.md v0.9.0
 3. LOGICAL_MODEL_SPECIFICATION.md v1.0
-4. DATABASE_SCHEMA_CONTRACT.md v1.2
+4. DATABASE_SCHEMA_CONTRACT.md v1.3.1
 5. META_INTEGRATION_SPECIFICATION.md v1.4
 6. Drizzle schema implementation
 7. Generated PostgreSQL migrations
@@ -217,7 +217,7 @@ hierarchy. They are a reflection on the state, not a normative reference.
 | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | [`TECHNICAL_SPECIFICATION.md`](./docs/architecture/TECHNICAL_SPECIFICATION.md)               | Platform-wide system behavior, state machines, failure modes.            |
 | [`LOGICAL_MODEL_SPECIFICATION.md`](./docs/architecture/LOGICAL_MODEL_SPECIFICATION.md)       | DB v1 logical ingestion, provenance, and clustering model.               |
-| [`DATABASE_SCHEMA_CONTRACT.md`](./docs/architecture/DATABASE_SCHEMA_CONTRACT.md)             | Physical PostgreSQL persistence contract (v1.2, 44 tables).              |
+| [`DATABASE_SCHEMA_CONTRACT.md`](./docs/architecture/DATABASE_SCHEMA_CONTRACT.md)             | Physical PostgreSQL persistence contract (v1.3.1, 45 tables).            |
 | [`META_INTEGRATION_SPECIFICATION.md`](./docs/architecture/META_INTEGRATION_SPECIFICATION.md) | Meta-specific behavioral authority (v1.4).                               |
 | [`HANDOFF.md`](./HANDOFF.md)                                                                 | Current state snapshot for session continuity.                           |
 | [`docs/README.md`](./docs/README.md)                                                         | Documentation index and reading order.                                   |
@@ -356,10 +356,12 @@ the bottom of that document.
 
 ## Project status
 
-**Phase 20 complete.** The baseline audit remediation is closed. All
-seventeen findings from the sprint audit are resolved, the CI pipeline
-protects `main` with the full test suite against real PostgreSQL and
-Redis, and the system is ready for the v1.3 milestone.
+**v1.3.1 complete.** The baseline audit remediation and the v1.3
+milestone (`webhook_endpoints`, multi-page Meta support, migrations
+`0000`–`0018`) are shipped. The CI pipeline enforces format, typecheck,
+an explicit build, and lint (0 errors, blocking) ahead of the full test
+suite against real PostgreSQL and Redis. Tests: 275 total, CI-driven
+(177 pass with DB/Redis env unset locally).
 
 ### Workspace
 
@@ -367,25 +369,25 @@ Six workspace packages:
 
 | Package                         | Purpose                                                                                                 |   Tests |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------: |
-| `packages/database`             | Drizzle schema, migrations, 15 repositories, `TransactionManager`                                       |      22 |
+| `packages/database`             | Drizzle schema, migrations, 19 repositories, `TransactionManager`                                       |      28 |
 | `packages/authentication`       | AES-256-GCM, `MetaCredentialService`, Graph API client, `MetaErrorMapper`                               |      37 |
 | `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                  |      26 |
 | `packages/publishers`           | `MetaInteractionAdapter`, `MetaPublisherAdapter`, reconcilers, rate limiter                             |      56 |
-| `apps/worker`                   | `OutboxDispatcher`, publication scheduler, interaction response scheduler, system queues, observability |     102 |
-| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                         |       8 |
-| **Total**                       |                                                                                                         | **251** |
+| `apps/worker`                   | `OutboxDispatcher`, publication scheduler, interaction response scheduler, system queues, observability |     118 |
+| `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                         |      10 |
+| **Total**                       |                                                                                                         | **275** |
 
 ### Implemented
 
-- [x] DB v1.2 schema — **44 tables**
-- [x] **15 migrations** (`0000` – `0014`), applied to Neon PostgreSQL
+- [x] DB v1.3 schema — **45 tables**
+- [x] **19 migrations** (`0000` – `0018`), applied to Neon PostgreSQL
 - [x] `pgcrypto` extension registered in the baseline migration
 - [x] Partial index `publications(external_post_id) WHERE ... IS NOT NULL`
 - [x] Partial unique index `provider_credentials_unique` with `COALESCE`
 - [x] Deferred FK `external_interactions.publication_id -> publications.id`
 - [x] `TransactionManager` (the `run(fn)` API)
 - [x] `createDatabaseClient` factory with health check and graceful shutdown
-- [x] **15 repositories**:
+- [x] **19 repositories**:
   - `OutboxRepository`
   - `WebhookSubscriptionsRepository`
   - `WebhookSubscriptionHealthRepository`
@@ -401,6 +403,10 @@ Six workspace packages:
   - `InteractionResponseAttemptsRepository`
   - `InteractionModerationActionsRepository`
   - `InteractionResponseReconciliationsRepository`
+  - `WebhookEndpointsRepository`
+  - `SystemConfigRepository`
+  - `NotificationsRepository`
+  - `SystemLogsRepository`
 - [x] **Credential encryption** (AES-256-GCM with AAD binding and key rotation)
 - [x] **`MetaCredentialService`** (store / rotate / invalidate / validate / healthCheck)
 - [x] **`MetaErrorMapper`** (Graph API error categorization)
@@ -415,8 +421,8 @@ Six workspace packages:
 - [x] **Publication reconciliation** (`publication.reconcile`, `MetaPublicationReconciler`)
 - [x] **Real Meta E2E verified** (Phase 18a inbound, Phase 19e outbound)
 - [x] Monorepo toolchain (pnpm workspaces, TS project references, ESLint flat config)
-- [x] **251 passing tests** against real PostgreSQL and Redis
-- [x] **CI pipeline** (GitHub Actions: install, format, typecheck, test)
+- [x] **275 tests** against real PostgreSQL and Redis in CI (177 pass with DB/Redis env unset)
+- [x] **CI pipeline** (GitHub Actions: install, format, typecheck, build, lint, test — lint and build are blocking gates)
 
 ### Audit status
 
@@ -458,8 +464,8 @@ UI milestone and is a documented deferred decision, not a defect.
 
 ### Next
 
-- [ ] **DB v1.3** — `webhook_endpoints` + multi-page Meta support
-- [ ] **Sprint E follow-ups** — README refresh (this change), v1.3 plan corrections
+- [x] **DB v1.3** — `webhook_endpoints` + multi-page Meta support (shipped; migrations through `0018`)
+- [ ] **Sprint E follow-ups** — v1.3 plan corrections
 - [ ] **Plan-level corrections** (from the readiness audit):
   - migration numbering from `0015`
   - AAD binding correction (`META:WEBHOOK_VERIFY_TOKEN:<destination_id>`)
@@ -476,7 +482,7 @@ the v1.3 preconditions.
 | Phase              | Scope                                                             | Status   |
 | ------------------ | ----------------------------------------------------------------- | -------- |
 | **v1.0 – v1.2**    | Database schema contract evolution                                | Complete |
-| **Phase 1 – 13**   | Drizzle schema implementation (44 tables)                         | Complete |
+| **Phase 1 – 13**   | Drizzle schema implementation (45 tables)                         | Complete |
 | **Phase 14**       | Local dev environment (Neon + Upstash)                            | Complete |
 | **Phase 15**       | Credential lifecycle (`MetaCredentialService`)                    | Complete |
 | **Phase 16**       | Outbox dispatcher (PG -> BullMQ)                                  | Complete |
@@ -491,7 +497,7 @@ the v1.3 preconditions.
 | **Phase 20b**      | Webhook crypto, rate limiters, atomic claims                      | Complete |
 | **Phase 20c**      | System queues, observability services                             | Complete |
 | **Phase 20d**      | `minIntervalSeconds` enforcement, CI pipeline, audit closure      | Complete |
-| **v1.3**           | `webhook_endpoints`, multi-page Meta support                      | Next     |
+| **v1.3**           | `webhook_endpoints`, multi-page Meta support                      | Complete |
 | **v1.4+**          | Analytics read models, materialized views, AI response generation | Planned  |
 
 ---

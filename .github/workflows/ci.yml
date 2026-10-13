@@ -1,13 +1,16 @@
 # ---------------------------------------------------------------------------
 # CI — Content Platform
 #
-# Runs on every push to main and on every pull request targeting main.
+# Runs on every push to any branch and on every pull request targeting
+# main.
 #
 # The job:
 #   1. Installs the pnpm workspace with a frozen lockfile
 #   2. Verifies code formatting
 #   3. Runs the TypeScript compiler in --noEmit mode
-#   4. Runs the test suite
+#   4. Builds every workspace package (pnpm build)
+#   5. Runs ESLint (blocking; 0 errors enforced, warnings non-blocking)
+#   6. Runs the test suite
 #
 # The DB- and Redis-backed tests require the TEST_DATABASE_URL and
 # TEST_REDIS_URL repository secrets. When those are absent, those tests

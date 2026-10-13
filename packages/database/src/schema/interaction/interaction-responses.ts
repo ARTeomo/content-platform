@@ -37,7 +37,7 @@ import { externalInteractions } from '../webhook/external-interactions.js';
  * One response per interaction in DB v1. Multi-response threads are a
  * deferred decision (D-008).
  *
- * @see DATABASE_SCHEMA_CONTRACT.md §5.39, §9.3
+ * @see DATABASE_SCHEMA_CONTRACT.md §5.41, §9.3
  */
 export const interactionResponses = pgTable(
   'interaction_responses',

@@ -71,7 +71,7 @@ describe.skipIf(!TEST_DB_URL)('interaction_responses destination FK (CP-F-02)', 
       }
 
       expect(fkViolation).not.toBeNull();
-      expect(fkViolation?.code).toBe('23503');
+      expect(fkViolation?.code).toBe('23001');
 
       const after = await client.sql`
         SELECT * FROM interaction_responses WHERE destination_id = ${destinationId} ORDER BY id

@@ -48,7 +48,7 @@ export const interactionResponses = pgTable(
       .references(() => externalInteractions.id, { onDelete: 'cascade' }),
     destinationId: uuid('destination_id')
       .notNull()
-      .references(() => destinations.id, { onDelete: 'set null' }),
+      .references(() => destinations.id, { onDelete: 'restrict' }),
     templateId: text('template_id'),
     templateVersion: integer('template_version').notNull().default(1),
     body: text('body'),

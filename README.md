@@ -6,7 +6,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 [![TypeScript](https://img.shields.io/badge/typescript-5.9.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Tests](https://img.shields.io/badge/tests-275%20total-brightgreen)](#project-status)
+[![Tests](https://img.shields.io/badge/tests-276%20total-brightgreen)](#project-status)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](#license)
 
 ---
@@ -157,7 +157,7 @@ content-platform/
 |   |   |   +-- repositories/      19 repository classes
 |   |   |   +-- transaction/       TransactionManager
 |   |   |   +-- client.ts          Database client factory
-|   |   +-- migrations/            0000 - 0018
+|   |   +-- migrations/            0000 - 0019
 |   |   +-- scripts/               Operational scripts
 |   +-- authentication/            Credential encryption + Meta lifecycle
 |   |   +-- src/
@@ -358,10 +358,13 @@ the bottom of that document.
 
 **v1.3.1 complete.** The baseline audit remediation and the v1.3
 milestone (`webhook_endpoints`, multi-page Meta support, migrations
-`0000`–`0018`) are shipped. The CI pipeline enforces format, typecheck,
+`0000`–`0019`) are shipped. The CI pipeline enforces format, typecheck,
 an explicit build, and lint (0 errors, blocking) ahead of the full test
-suite against real PostgreSQL and Redis. Tests: 275 total, CI-driven
-(177 pass with DB/Redis env unset locally).
+suite against real PostgreSQL and Redis. Tests: 276 total, CI-driven
+(177 pass with DB/Redis env unset locally). Post-v1.3.1 hardening is
+merged: WP-1 (`interaction_responses.destination_id` is now `ON DELETE
+RESTRICT`, migration `0019`) and CI twin-run serialization (WP-4 first
+half).
 
 ### Workspace
 
@@ -369,18 +372,18 @@ Six workspace packages:
 
 | Package                         | Purpose                                                                                                 |   Tests |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------: |
-| `packages/database`             | Drizzle schema, migrations, 19 repositories, `TransactionManager`                                       |      28 |
+| `packages/database`             | Drizzle schema, migrations, 19 repositories, `TransactionManager`                                       |      29 |
 | `packages/authentication`       | AES-256-GCM, `MetaCredentialService`, Graph API client, `MetaErrorMapper`                               |      37 |
 | `packages/interaction-response` | Policy engine, template renderer (pure, deterministic)                                                  |      26 |
 | `packages/publishers`           | `MetaInteractionAdapter`, `MetaPublisherAdapter`, reconcilers, rate limiter                             |      56 |
 | `apps/worker`                   | `OutboxDispatcher`, publication scheduler, interaction response scheduler, system queues, observability |     118 |
 | `apps/api`                      | Fastify webhook ingress (POST + GET), handshake                                                         |      10 |
-| **Total**                       |                                                                                                         | **275** |
+| **Total**                       |                                                                                                         | **276** |
 
 ### Implemented
 
 - [x] DB v1.3 schema — **45 tables**
-- [x] **19 migrations** (`0000` – `0018`), applied to Neon PostgreSQL
+- [x] **20 migrations** (`0000` – `0019`), applied to Neon PostgreSQL
 - [x] `pgcrypto` extension registered in the baseline migration
 - [x] Partial index `publications(external_post_id) WHERE ... IS NOT NULL`
 - [x] Partial unique index `provider_credentials_unique` with `COALESCE`
@@ -421,7 +424,7 @@ Six workspace packages:
 - [x] **Publication reconciliation** (`publication.reconcile`, `MetaPublicationReconciler`)
 - [x] **Real Meta E2E verified** (Phase 18a inbound, Phase 19e outbound)
 - [x] Monorepo toolchain (pnpm workspaces, TS project references, ESLint flat config)
-- [x] **275 tests** against real PostgreSQL and Redis in CI (177 pass with DB/Redis env unset)
+- [x] **276 tests** against real PostgreSQL and Redis in CI (177 pass with DB/Redis env unset)
 - [x] **CI pipeline** (GitHub Actions: install, format, typecheck, build, lint, test — lint and build are blocking gates)
 
 ### Audit status

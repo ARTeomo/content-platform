@@ -12,10 +12,14 @@
 #   5. Runs ESLint (blocking; 0 errors enforced, warnings non-blocking)
 #   6. Runs the test suite
 #
-# The DB- and Redis-backed tests require the TEST_DATABASE_URL and
-# TEST_REDIS_URL repository secrets. When those are absent, those tests
-# self-skip via the `describe.skipIf(!TEST_DB_URL)` pattern and the job
-# still passes with the non-DB tests.
+# The DB- and Redis-backed tests run against ephemeral service
+# containers (PostgreSQL 16 + Redis 7) provisioned per job. The
+# workflow sets TEST_DATABASE_URL / TEST_REDIS_URL to the local
+# container endpoints and applies all migrations before the test step,
+# so the gated suites always execute in CI. Locally, when those
+# variables are unset, the same tests self-skip via the
+# `describe.skipIf(!TEST_DB_URL)` pattern and the suite still passes
+# with the non-DB tests.
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -39,6 +43,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: content
+          POSTGRES_PASSWORD: content
+          POSTGRES_DB: content_platform_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U content -d content_platform_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      TEST_DATABASE_URL: postgresql://content:content@localhost:5432/content_platform_test
+      TEST_REDIS_URL: redis://localhost:6379
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +87,24 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify test service endpoints are local
+        run: |
+          node -e "
+          for (const name of ['TEST_DATABASE_URL', 'TEST_REDIS_URL']) {
+            const value = process.env[name];
+            if (!value) {
+              console.error('FAIL: ' + name + ' is missing or empty');
+              process.exit(1);
+            }
+            const host = new URL(value).hostname;
+            if (host !== 'localhost' && host !== '127.0.0.1') {
+              console.error('FAIL: ' + name + ' points at a non-local host');
+              process.exit(1);
+            }
+            console.log('PASS: ' + name + ' endpoint is local');
+          }
+          "
+
       - name: Format check
         run: pnpm format:check
 
@@ -67,10 +117,10 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Apply migrations to test database
+        run: pnpm --filter @content-platform/database db:migrate
+        env:
+          DATABASE_URL: postgresql://content:content@localhost:5432/content_platform_test
+
       - name: Test
         run: pnpm test
-        env:
-          # Empty strings when the secrets are not configured. The test
-          # suite detects this and skips the DB- and Redis-backed tests.
-          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
-          TEST_REDIS_URL: ${{ secrets.TEST_REDIS_URL }}

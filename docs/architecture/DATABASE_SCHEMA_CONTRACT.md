@@ -2095,21 +2095,24 @@ Unique constraint:
 (interaction_id)
 ```
 
-**Status vocabulary (complete, aligned with §9.3):**
+**Status vocabulary (complete; the schema is the source of truth —**
+`packages/database/src/schema/interaction/interaction-responses.ts`,
+`interaction_responses_status_check`**):**
 
 ```sql
 CHECK (status IN (
-  'DRAFT',
-  'AUTO_RESPOND',
-  'MODERATION_REQUIRED',
-  'APPROVED',
-  'REJECTED',
-  'SCHEDULED',
-  'RESPONDED',
-  'FAILED',
-  'CANCELLED'
+  -- core review flow (documented in §9.3):
+  'DRAFT', 'AUTO_RESPOND', 'MODERATION_REQUIRED', 'APPROVED', 'REJECTED',
+  'SCHEDULED', 'RESPONDED', 'FAILED', 'CANCELLED',
+  -- operational:
+  'EDITED', 'QUEUED', 'IN_PROGRESS', 'RETRY',
+  -- reconciliation:
+  'UNKNOWN', 'RECONCILIATION'
 ))
 ```
+
+§9.3 documents the core review flow; the DB CHECK is the wider
+operational vocabulary.
 
 **Referential action rationale:**
 

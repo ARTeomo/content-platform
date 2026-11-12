@@ -122,5 +122,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://content:content@localhost:5432/content_platform_test
 
+      - name: FK catalog capture
+        run: |
+          pnpm --filter @content-platform/database exec node --input-type=module -e "import postgres from 'postgres'; const sql = postgres(process.env.TEST_DATABASE_URL); const v = await sql\`select version() as v\`; console.log('VERSION:', v[0].v); for (const c of await sql\`select conname, confdeltype, condeferrable, condeferred, pg_get_constraintdef(oid) as def from pg_constraint where contype='f' and confrelid='destinations'::regclass order by conname\`) console.log('FK:', JSON.stringify(c)); const j = await sql\`select count(*)::int as n from drizzle.__drizzle_migrations\`; console.log('JOURNAL_COUNT:', j[0].n); await sql.end();"
+
       - name: Test
         run: pnpm test

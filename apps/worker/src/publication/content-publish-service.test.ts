@@ -7,7 +7,10 @@ import {
   type DatabaseClient,
 } from '@content-platform/database';
 import type { MetaPublisherAdapter } from '@content-platform/publishers';
-import { ContentPublishService, type ContentPublishServiceDeps } from './content-publish-service.js';
+import {
+  ContentPublishService,
+  type ContentPublishServiceDeps,
+} from './content-publish-service.js';
 
 const TEST_DB_URL = process.env.TEST_DATABASE_URL;
 

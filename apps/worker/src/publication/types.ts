@@ -38,6 +38,7 @@ export type PublishOutcome =
 export interface PublicationContext {
   publicationId: string;
   publicationStatus: string;
+  contentId: string;
   destinationId: string;
   publicationCandidateId: string;
   externalPostId: string | null;

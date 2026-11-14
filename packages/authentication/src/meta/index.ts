@@ -12,6 +12,7 @@ export {
 export {
   MetaCredentialService,
   type MetaCredentialServiceConfig,
+  type MetaCredentialServiceHooks,
 } from './meta-credential-service.js';
 
 export {

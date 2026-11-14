@@ -158,7 +158,29 @@ async function main(): Promise<void> {
 
   // ---- Meta credential bridge ----
 
-  const credentialBundle = buildMetaCredentialService(db.db, config);
+  // WP-11 J.3: storing a destination credential requeues publications
+  // that the scheduler's credential gate had moved to FAILED — the
+  // state flip and the outbox enqueues commit in the same transaction
+  // as the credential upsert. Idempotent by construction: the UPDATE
+  // only matches FAILED + CREDENTIAL_GATE rows, and outbox enqueue is
+  // idempotent on job_id.
+  const credentialBundle = buildMetaCredentialService(db.db, config, {
+    onCredentialStored: async (tx, { destinationId }) => {
+      const requeued = await publicationsRepo.requeueCredentialGateFailures(tx, destinationId);
+      for (const publicationId of requeued) {
+        await outboxRepo.enqueue(tx, {
+          queueName: 'content.publish',
+          jobId: `content.publish:${publicationId}`,
+          payload: { publicationId },
+        });
+      }
+      if (requeued.length > 0) {
+        console.info(
+          `[worker] credential stored for ${destinationId}: requeued ${requeued.length} credential-gate publication(s)`,
+        );
+      }
+    },
+  });
   if (!credentialBundle.available || !credentialBundle.service) {
     throw new Error(
       `[worker] FATAL: DB-backed Meta credentials are required to start. ` +

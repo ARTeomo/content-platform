@@ -1,6 +1,7 @@
 import type {
   ProviderCredentialRow,
   ProviderCredentialsRepository,
+  Transaction,
   TransactionManager,
 } from '@content-platform/database';
 import { AuthenticationError } from '../errors.js';
@@ -26,6 +27,20 @@ export interface MetaCredentialServiceConfig {
 }
 
 /**
+ * Optional cross-domain side effects, invoked inside the same
+ * transaction as the credential write so a commit carries either both
+ * effects or neither.
+ */
+export interface MetaCredentialServiceHooks {
+  /**
+   * Called within `storeCredential`'s transaction after a
+   * destination-scoped credential upsert. Implementations must be
+   * idempotent — they can run on every store, including no-op stores.
+   */
+  onCredentialStored?: (tx: Transaction, ctx: { destinationId: string }) => Promise<void>;
+}
+
+/**
  * Orchestrates the Meta credential lifecycle.
  *
  * Responsibilities:
@@ -45,6 +60,7 @@ export class MetaCredentialService {
     private readonly encryption: CredentialEncryptionProvider,
     private readonly graphClient: MetaGraphClient,
     private readonly config: MetaCredentialServiceConfig,
+    private readonly hooks?: MetaCredentialServiceHooks,
   ) {}
 
   /**
@@ -103,8 +119,8 @@ export class MetaCredentialService {
       destinationId: input.destinationId,
     });
 
-    return await this.txManager.run(async (tx) =>
-      this.credentialsRepo.upsert(tx, {
+    return await this.txManager.run(async (tx) => {
+      const row = await this.credentialsRepo.upsert(tx, {
         scope: input.scope,
         destinationId: input.destinationId,
         provider: 'META',
@@ -113,8 +129,16 @@ export class MetaCredentialService {
         encryptionKeyVersion: encrypted.keyVersion,
         status: input.status ?? 'UNKNOWN',
         expiresAt: input.expiresAt ?? null,
-      }),
-    );
+      });
+      if (
+        input.scope === 'DESTINATION' &&
+        input.destinationId !== null &&
+        this.hooks?.onCredentialStored
+      ) {
+        await this.hooks.onCredentialStored(tx, { destinationId: input.destinationId });
+      }
+      return row;
+    });
   }
 
   /**

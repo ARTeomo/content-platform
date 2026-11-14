@@ -2,6 +2,7 @@ import {
   CredentialEncryptionProvider,
   HttpMetaGraphClient,
   MetaCredentialService,
+  type MetaCredentialServiceHooks,
 } from '@content-platform/authentication';
 import {
   ProviderCredentialsRepository,
@@ -45,6 +46,7 @@ export interface MetaCredentialServiceBundle {
 export function buildMetaCredentialService(
   db: Database,
   config: WorkerConfig,
+  hooks?: MetaCredentialServiceHooks,
 ): MetaCredentialServiceBundle {
   const missing: string[] = [];
   if (!config.metaCredentialEncryptionKeys) missing.push('META_CREDENTIAL_ENCRYPTION_KEYS');
@@ -99,6 +101,7 @@ export function buildMetaCredentialService(
       appId: config.metaAppId!,
       appSecret: config.metaAppSecret!,
     },
+    hooks,
   );
 
   return { service, available: true };

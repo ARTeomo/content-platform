@@ -46,6 +46,7 @@ export const publications = pgTable(
     scheduledAt: nullableTimestampColumn('scheduled_at'),
     publishedAt: nullableTimestampColumn('published_at'),
     externalPostId: text('external_post_id'),
+    failureCategory: text('failure_category'),
     createdAt: createdAtColumn(),
     updatedAt: updatedAtColumn(),
   },

@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createDatabaseClient,
+  NotificationsRepository,
   OutboxRepository,
+  PublicationAttemptsRepository,
   PublicationsRepository,
   TransactionManager,
   type DatabaseClient,
@@ -19,6 +21,8 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
   let client: DatabaseClient;
   let txManager: TransactionManager;
   let publicationsRepo: PublicationsRepository;
+  let publicationAttemptsRepo: PublicationAttemptsRepository;
+  let notificationsRepo: NotificationsRepository;
   let outboxRepo: OutboxRepository;
 
   let destinationId: string;
@@ -30,6 +34,8 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     client = createDatabaseClient({ url: TEST_DB_URL! });
     txManager = new TransactionManager(client.db);
     publicationsRepo = new PublicationsRepository(client.db);
+    publicationAttemptsRepo = new PublicationAttemptsRepository(client.db);
+    notificationsRepo = new NotificationsRepository(client.db);
     outboxRepo = new OutboxRepository(client.db);
 
     destinationId = await ensureDestination(client, 'test-scheduler-dest');
@@ -43,7 +49,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
   });
 
   beforeEach(async () => {
-    await client.sql`TRUNCATE outbox_jobs, publications, publication_candidates CASCADE`;
+    await client.sql`TRUNCATE outbox_jobs, notifications, publication_attempts, publications, publication_candidates CASCADE`;
   });
 
   // ---------------------------------------------------------------------
@@ -58,9 +64,11 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     return new PublicationSchedulerService({
       txManager,
       publicationsRepo,
+      publicationAttemptsRepo,
+      notificationsRepo,
       outboxRepo,
       batchSize: 10,
-      reconcileStaleThresholdSeconds: 300,
+      staleThresholdSeconds: 300,
       credentialService: options.credentialService,
       ...(options.alerting !== undefined && { alerting: options.alerting }),
       ...(options.notificationDedupWindowMs !== undefined && {
@@ -107,7 +115,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
   }
 
   async function createPublication(input: {
-    status: 'SCHEDULED' | 'RECONCILIATION';
+    status: 'SCHEDULED' | 'RECONCILIATION' | 'IN_PROGRESS';
     destinationId?: string;
     scheduledAt?: Date;
     updatedAtAgoSeconds?: number;
@@ -152,6 +160,47 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       SELECT failure_category FROM publications WHERE id = ${id}
     `;
     return row!.failure_category;
+  }
+
+  async function createPendingAttempt(publicationId: string): Promise<string> {
+    const attempt = await client.sql<{ id: string }[]>`
+      INSERT INTO publication_attempts (publication_id, attempt_number, status, started_at)
+      VALUES (${publicationId}, 1, 'PENDING', now())
+      RETURNING id
+    `;
+    return attempt[0]!.id;
+  }
+
+  async function getLatestAttempt(
+    publicationId: string,
+  ): Promise<{ status: string; error_category: string | null; finished_at: string | null }> {
+    const [row] = await client.sql<
+      { status: string; error_category: string | null; finished_at: string | null }[]
+    >`
+      SELECT status, error_category, finished_at
+      FROM publication_attempts
+      WHERE publication_id = ${publicationId}
+      ORDER BY attempt_number DESC
+      LIMIT 1
+    `;
+    return row!;
+  }
+
+  async function countNotifications(publicationId: string): Promise<number> {
+    const [row] = await client.sql<{ c: number }[]>`
+      SELECT COUNT(*)::int AS c FROM notifications WHERE publication_id = ${publicationId}
+    `;
+    return row!.c;
+  }
+
+  async function getContentItemSnapshot(): Promise<{
+    status: string;
+    published_at: string | null;
+  }> {
+    const [row] = await client.sql<{ status: string; published_at: string | null }[]>`
+      SELECT status, published_at FROM content_items WHERE id = ${contentItemId}
+    `;
+    return row!;
   }
 
   async function countOutbox(): Promise<number> {
@@ -444,6 +493,102 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     });
     await scheduler.runOnce();
     expect(blockedSpy).toHaveBeenCalledTimes(2);
+  });
+
+  // ---------------------------------------------------------------------
+  // Crash recovery (C-D5) tests
+  // ---------------------------------------------------------------------
+
+  it('recovers a stale IN_PROGRESS publication: FAILED/CRASH_RECOVERY, attempt finalized, one notification, no publish enqueued, parent untouched', async () => {
+    const id = await createPublication({ status: 'IN_PROGRESS', updatedAtAgoSeconds: 3_600 });
+    const attemptId = await createPendingAttempt(id);
+    const parentBefore = await getContentItemSnapshot();
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const result = await scheduler.runOnce();
+
+    expect(result.recoveredCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CRASH_RECOVERY');
+
+    const attempt = await getLatestAttempt(id);
+    expect(attempt.status).toBe('FAILED');
+    expect(attempt.error_category).toBe('PROCESSING_TIMEOUT');
+    expect(attempt.finished_at).not.toBeNull();
+
+    const [notification] = await client.sql<
+      { type: string; severity: string; resolved_at: string | null; is_read: boolean }[]
+    >`
+      SELECT type, severity, resolved_at, is_read FROM notifications WHERE publication_id = ${id}
+    `;
+    expect(notification!.type).toBe('publication_failure');
+    expect(notification!.severity).toBe('ERROR');
+    expect(notification!.resolved_at).toBeNull();
+    expect(notification!.is_read).toBe(false);
+    expect(await countNotifications(id)).toBe(1);
+
+    // No retry/re-publish is initiated for an uncertain external outcome.
+    expect(await countOutbox()).toBe(0);
+    // The parent content item is a J.2 success-path concern only.
+    expect(await getContentItemSnapshot()).toEqual(parentBefore);
+    void attemptId;
+  });
+
+  it('recovery: does not touch a fresh IN_PROGRESS publication', async () => {
+    const id = await createPublication({ status: 'IN_PROGRESS', updatedAtAgoSeconds: 10 });
+    await createPendingAttempt(id);
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const result = await scheduler.runOnce();
+
+    expect(result.recoveredCount).toBe(0);
+    expect(await getPublicationStatus(id)).toBe('IN_PROGRESS');
+    expect(await countNotifications(id)).toBe(0);
+  });
+
+  it('recovery: second run is a no-op (idempotent by construction)', async () => {
+    const id = await createPublication({ status: 'IN_PROGRESS', updatedAtAgoSeconds: 3_600 });
+    await createPendingAttempt(id);
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    expect((await scheduler.runOnce()).recoveredCount).toBe(1);
+    expect((await scheduler.runOnce()).recoveredCount).toBe(0);
+
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await countNotifications(id)).toBe(1);
+  });
+
+  it('recovery: a publication that completed before the claim is not overwritten (no notification, no FAILED)', async () => {
+    const id = await createPublication({ status: 'IN_PROGRESS', updatedAtAgoSeconds: 3_600 });
+    await createPendingAttempt(id);
+    // Simulate the executing worker winning the race: it persisted the
+    // success between candidate selection and the atomic claim.
+    await client.sql`
+      UPDATE publications SET status = 'PUBLISHED', published_at = now() WHERE id = ${id}
+    `;
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const result = await scheduler.runOnce();
+
+    expect(result.recoveredCount).toBe(0);
+    expect(await getPublicationStatus(id)).toBe('PUBLISHED');
+    expect(await getPublicationFailureCategory(id)).toBeNull();
+    expect(await countNotifications(id)).toBe(0);
+  });
+
+  it('recovery: concurrent executions claim a stale publication exactly once', async () => {
+    const id = await createPublication({ status: 'IN_PROGRESS', updatedAtAgoSeconds: 3_600 });
+    await createPendingAttempt(id);
+
+    const [first, second] = await Promise.all([
+      buildScheduler({ credentialService: permissiveCredentialService() }).runOnce(),
+      buildScheduler({ credentialService: permissiveCredentialService() }).runOnce(),
+    ]);
+
+    expect(first.recoveredCount + second.recoveredCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CRASH_RECOVERY');
+    expect(await countNotifications(id)).toBe(1);
   });
 });
 

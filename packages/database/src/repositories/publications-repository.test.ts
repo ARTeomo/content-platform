@@ -129,6 +129,94 @@ describe.skipIf(!TEST_DB_URL)('PublicationsRepository', () => {
     const row = await getPublication(gateBlocked);
     expect(row.status).toBe('SCHEDULED');
   });
+
+  // ---------------------------------------------------------------------
+  // Stale IN_PROGRESS detection and atomic claim (C-D5)
+  // ---------------------------------------------------------------------
+
+  async function createInProgressPublication(updatedAtAgoSeconds: number): Promise<string> {
+    const candidate = await createCandidate();
+    const created = await client.sql<{ id: string }[]>`
+      INSERT INTO publications
+        (publication_candidate_id, destination_id, status)
+      VALUES
+        (${candidate}, ${destinationId}, 'IN_PROGRESS')
+      RETURNING id
+    `;
+    const id = created[0]!.id;
+    await client.sql`
+      UPDATE publications
+      SET updated_at = now() - (${updatedAtAgoSeconds} * interval '1 second')
+      WHERE id = ${id}
+    `;
+    return id;
+  }
+
+  it('findStaleInProgress returns only stale IN_PROGRESS publication ids', async () => {
+    const stale = await createInProgressPublication(3_600);
+    await createInProgressPublication(10); // fresh — excluded
+    const scheduled = await client.sql<{ id: string }[]>`
+      INSERT INTO publications
+        (publication_candidate_id, destination_id, status, scheduled_at)
+      VALUES
+        (${await createCandidate()}, ${destinationId}, 'SCHEDULED', now())
+      RETURNING id
+    `;
+
+    const ids = await repo.findStaleInProgress(300, 10);
+
+    expect(ids).toEqual([stale]);
+    void scheduled;
+  });
+
+  it('claimStaleInProgress atomically claims a stale IN_PROGRESS row as FAILED/CRASH_RECOVERY', async () => {
+    const id = await createInProgressPublication(3_600);
+
+    const claimed = await txManager.run(async (tx) => repo.claimStaleInProgress(tx, id, 300));
+    expect(claimed).toBe(true);
+
+    const row = await getPublication(id);
+    expect(row.status).toBe('FAILED');
+    expect(row.failure_category).toBe('CRASH_RECOVERY');
+  });
+
+  it('claimStaleInProgress refuses a fresh (non-stale) IN_PROGRESS row', async () => {
+    const id = await createInProgressPublication(10);
+
+    const claimed = await txManager.run(async (tx) => repo.claimStaleInProgress(tx, id, 300));
+    expect(claimed).toBe(false);
+
+    const row = await getPublication(id);
+    expect(row.status).toBe('IN_PROGRESS');
+    expect(row.failure_category).toBeNull();
+  });
+
+  it('claimStaleInProgress refuses a row that already left IN_PROGRESS', async () => {
+    const id = await createInProgressPublication(3_600);
+    await client.sql`
+      UPDATE publications SET status = 'PUBLISHED', published_at = now() WHERE id = ${id}
+    `;
+
+    const claimed = await txManager.run(async (tx) => repo.claimStaleInProgress(tx, id, 300));
+    expect(claimed).toBe(false);
+
+    const row = await getPublication(id);
+    expect(row.status).toBe('PUBLISHED');
+    expect(row.failure_category).toBeNull();
+  });
+
+  it('claimStaleInProgress second run is a no-op (idempotent by construction)', async () => {
+    const id = await createInProgressPublication(3_600);
+
+    const first = await txManager.run(async (tx) => repo.claimStaleInProgress(tx, id, 300));
+    const second = await txManager.run(async (tx) => repo.claimStaleInProgress(tx, id, 300));
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+
+    const row = await getPublication(id);
+    expect(row.status).toBe('FAILED');
+    expect(row.failure_category).toBe('CRASH_RECOVERY');
+  });
 });
 
 // ---------------------------------------------------------------------------

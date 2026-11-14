@@ -394,9 +394,11 @@ async function main(): Promise<void> {
   const publicationSchedulerService = new PublicationSchedulerService({
     txManager,
     publicationsRepo,
+    publicationAttemptsRepo,
+    notificationsRepo,
     outboxRepo,
     batchSize: config.publicationScheduleBatchSize,
-    reconcileStaleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
+    staleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
     alerting,
     credentialService: credentialBundle.service,
   });

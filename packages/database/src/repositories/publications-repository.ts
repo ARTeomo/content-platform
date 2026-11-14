@@ -96,9 +96,17 @@ export class PublicationsRepository {
       .limit(limit);
   }
 
-  async findStaleInProgress(thresholdSeconds: number, limit: number): Promise<PublicationRow[]> {
-    return await this.db
-      .select()
+  /**
+   * Phase 1 of stale-publication recovery (C-D5): candidate selection.
+   *
+   * Plain read of candidate IDs only — no locks are held and no row is
+   * modified here. Eligibility MUST be re-evaluated atomically at claim
+   * time (`claimStaleInProgress`), so this scan may return IDs that a
+   * concurrent worker has already finalized; claimers must skip those.
+   */
+  async findStaleInProgress(thresholdSeconds: number, limit: number): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: publications.id })
       .from(publications)
       .where(
         and(
@@ -108,6 +116,35 @@ export class PublicationsRepository {
       )
       .orderBy(publications.updatedAt)
       .limit(limit);
+    return rows.map((r) => r.id);
+  }
+
+  /**
+   * Phase 2 of stale-publication recovery (C-D5): atomic claim.
+   *
+   * Single conditional UPDATE ... RETURNING. The transition to FAILED is
+   * the claim: the status and staleness predicates are re-evaluated at
+   * claim time, so exactly one concurrent claimer wins and the winner is
+   * the only writer allowed to perform recovery bookkeeping. A crashed
+   * worker leaves the external outcome uncertain — FAILED + CRASH_RECOVERY
+   * is the safe terminal state; recovery never retries automatically.
+   */
+  async claimStaleInProgress(
+    tx: Transaction,
+    id: string,
+    thresholdSeconds: number,
+  ): Promise<boolean> {
+    const rows = (await tx.execute(sql`
+      UPDATE publications
+      SET status = 'FAILED',
+          failure_category = 'CRASH_RECOVERY',
+          updated_at = now()
+      WHERE id = ${id}
+        AND status = 'IN_PROGRESS'
+        AND updated_at < now() - interval '${sql.raw(String(thresholdSeconds))} seconds'
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.length === 1;
   }
 
   async findReconciliationPending(limit: number): Promise<PublicationRow[]> {

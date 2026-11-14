@@ -267,6 +267,81 @@ describe.skipIf(!TEST_DB_URL)('PublicationsRepository', () => {
     expect((await getPublication(gateFailed)).failure_category).toBe('CREDENTIAL_GATE');
     expect((await getPublication(reconciliation)).status).toBe('RECONCILIATION');
   });
+
+  // ---------------------------------------------------------------------
+  // Retry requeue claims and selection (C-D6)
+  // ---------------------------------------------------------------------
+
+  async function createRetryRow(attempts: number, updatedAtAgoSeconds: number): Promise<string> {
+    const candidate = await createCandidate();
+    const created = await client.sql<{ id: string }[]>`
+      INSERT INTO publications
+        (publication_candidate_id, destination_id, status)
+      VALUES
+        (${candidate}, ${destinationId}, 'RETRY')
+      RETURNING id
+    `;
+    const id = created[0]!.id;
+    for (let n = 1; n <= attempts; n++) {
+      await client.sql`
+        INSERT INTO publication_attempts
+          (publication_id, attempt_number, status, started_at, finished_at)
+        VALUES (${id}, ${n}, 'FAILED', now(), now())
+      `;
+    }
+    await client.sql`
+      UPDATE publications
+      SET updated_at = now() - (${updatedAtAgoSeconds} * interval '1 second')
+      WHERE id = ${id}
+    `;
+    return id;
+  }
+
+  it('findRetryCandidates returns only RETRY rows with max attempts, ordered by updated_at', async () => {
+    const older = await createRetryRow(2, 3_000);
+    const newer = await createRetryRow(0, 100);
+    await createInProgressPublication(3_600); // not RETRY — excluded
+
+    const candidates = await repo.findRetryCandidates(10);
+
+    expect(candidates.map((c) => c.id)).toEqual([older, newer]);
+    expect(candidates[0]!.maxAttempt).toBe(2);
+    expect(candidates[1]!.maxAttempt).toBe(0);
+  });
+
+  it('claimRetryDue flips a due, under-bound RETRY row to SCHEDULED and refuses not-yet-due or at-bound rows', async () => {
+    const due = await createRetryRow(1, 120);
+    const fresh = await createRetryRow(1, 10);
+    const atBound = await createRetryRow(5, 120);
+
+    expect(await txManager.run(async (tx) => repo.claimRetryDue(tx, due, 5, 60))).toBe(true);
+    const row = await getPublication(due);
+    expect(row.status).toBe('SCHEDULED');
+    expect(row.failure_category).toBeNull();
+    expect(row.scheduled_at).not.toBeNull();
+
+    expect(await txManager.run(async (tx) => repo.claimRetryDue(tx, fresh, 5, 60))).toBe(false);
+    expect((await getPublication(fresh)).status).toBe('RETRY');
+
+    expect(await txManager.run(async (tx) => repo.claimRetryDue(tx, atBound, 5, 60))).toBe(false);
+    expect((await getPublication(atBound)).status).toBe('RETRY');
+  });
+
+  it('claimRetryExhausted flips an at-bound RETRY row to FAILED/RETRY_EXHAUSTED, idempotently', async () => {
+    const atBound = await createRetryRow(5, 30); // not due — exhaustion must still fire
+    const belowBound = await createRetryRow(4, 120);
+
+    expect(await txManager.run(async (tx) => repo.claimRetryExhausted(tx, atBound, 5))).toBe(true);
+    const row = await getPublication(atBound);
+    expect(row.status).toBe('FAILED');
+    expect(row.failure_category).toBe('RETRY_EXHAUSTED');
+
+    expect(await txManager.run(async (tx) => repo.claimRetryExhausted(tx, atBound, 5))).toBe(false);
+    expect(await txManager.run(async (tx) => repo.claimRetryExhausted(tx, belowBound, 5))).toBe(
+      false,
+    );
+    expect((await getPublication(belowBound)).status).toBe('RETRY');
+  });
 });
 
 // ---------------------------------------------------------------------------

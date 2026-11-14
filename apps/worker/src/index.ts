@@ -399,6 +399,9 @@ async function main(): Promise<void> {
     outboxRepo,
     batchSize: config.publicationScheduleBatchSize,
     staleThresholdSeconds: config.publicationReconcileStaleThresholdSeconds,
+    retryMaxAttempts: config.publicationRetryMaxAttempts,
+    retryBaseDelaySeconds: config.publicationRetryBaseDelaySeconds,
+    retryMaxDelaySeconds: config.publicationRetryMaxDelaySeconds,
     alerting,
     credentialService: credentialBundle.service,
   });

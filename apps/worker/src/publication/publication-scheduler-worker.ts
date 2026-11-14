@@ -48,9 +48,14 @@ export class PublicationSchedulerWorker {
 
     try {
       const result = await this.options.scheduler.runOnce();
-      if (result.scheduledCount > 0 || result.reconciledCount > 0 || result.recoveredCount > 0) {
+      if (
+        result.scheduledCount > 0 ||
+        result.reconciledCount > 0 ||
+        result.recoveredCount > 0 ||
+        result.retriedCount > 0
+      ) {
         this.log.info(
-          `[publication.schedule] scheduled=${result.scheduledCount} reconciled=${result.reconciledCount} recovered=${result.recoveredCount}`,
+          `[publication.schedule] scheduled=${result.scheduledCount} reconciled=${result.reconciledCount} recovered=${result.recoveredCount} retried=${result.retriedCount}`,
         );
       }
     } catch (err) {

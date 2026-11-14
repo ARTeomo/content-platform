@@ -65,3 +65,41 @@ describe('loadWorkerConfig — META_CREDENTIAL_ENCRYPTION_KEYS', () => {
     );
   });
 });
+
+describe('loadWorkerConfig — publication retry requeue bounds (C-D6)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function stubBaseEnv(): void {
+    vi.stubEnv('DATABASE_URL', 'postgres://user:pass@localhost:5432/db');
+    vi.stubEnv('REDIS_URL', 'redis://localhost:6379');
+  }
+
+  it('defaults to 5 attempts, 60s base delay, 3600s max delay', () => {
+    stubBaseEnv();
+    const config = loadWorkerConfig();
+    expect(config.publicationRetryMaxAttempts).toBe(5);
+    expect(config.publicationRetryBaseDelaySeconds).toBe(60);
+    expect(config.publicationRetryMaxDelaySeconds).toBe(3600);
+  });
+
+  it('parses explicit overrides', () => {
+    stubBaseEnv();
+    vi.stubEnv('PUBLICATION_RETRY_MAX_ATTEMPTS', '3');
+    vi.stubEnv('PUBLICATION_RETRY_BASE_DELAY_SECONDS', '30');
+    vi.stubEnv('PUBLICATION_RETRY_MAX_DELAY_SECONDS', '600');
+    const config = loadWorkerConfig();
+    expect(config.publicationRetryMaxAttempts).toBe(3);
+    expect(config.publicationRetryBaseDelaySeconds).toBe(30);
+    expect(config.publicationRetryMaxDelaySeconds).toBe(600);
+  });
+
+  it('rejects a non-integer override', () => {
+    stubBaseEnv();
+    vi.stubEnv('PUBLICATION_RETRY_MAX_ATTEMPTS', 'lots');
+    expect(() => loadWorkerConfig()).toThrow(
+      'Environment variable PUBLICATION_RETRY_MAX_ATTEMPTS must be an integer, got "lots"',
+    );
+  });
+});

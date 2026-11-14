@@ -23,6 +23,19 @@ export interface PublicationSchedulerServiceDeps {
    */
   staleThresholdSeconds: number;
   /**
+   * C-D6 retry requeue bounds. `retryMaxAttempts` caps the number of
+   * publication attempts (a row whose max attempt number has reached
+   * the bound moves to FAILED/RETRY_EXHAUSTED instead of being
+   * requeued). `retryBaseDelaySeconds` is the first backoff interval;
+   * it doubles per attempt, capped at `retryMaxDelaySeconds`. Backoff
+   * is measured from `updated_at`, which every RETRY transition bumps
+   * in the same transaction (verified: ContentPublishService RETRY
+   * branch, PublicationReconcileService RETRY_ELIGIBLE branch).
+   */
+  retryMaxAttempts: number;
+  retryBaseDelaySeconds: number;
+  retryMaxDelaySeconds: number;
+  /**
    * Mandatory credential health gate. The worker bootstrap refuses to
    * start when the credential bundle is unavailable; see
    * apps/worker/src/index.ts.
@@ -41,6 +54,7 @@ export interface PublicationSchedulerRunResult {
   scheduledCount: number;
   reconciledCount: number;
   recoveredCount: number;
+  retriedCount: number;
   blockedByCredentialCount: number;
 }
 
@@ -62,16 +76,25 @@ export class PublicationSchedulerService {
     const scheduled = await this.scanScheduled();
     const reconciledCount = await this.scanStaleReconciliation();
     const recoveredCount = await this.scanStaleInProgress();
+    const retriedCount = await this.scanDueRetries();
     return {
       scheduledCount: scheduled.enqueued,
       reconciledCount,
       recoveredCount,
+      retriedCount,
       blockedByCredentialCount: scheduled.blocked,
     };
   }
 
   private async scanScheduled(): Promise<{ enqueued: number; blocked: number }> {
-    const { txManager, publicationsRepo, outboxRepo, batchSize, credentialService } = this.deps;
+    const {
+      txManager,
+      publicationsRepo,
+      publicationAttemptsRepo,
+      outboxRepo,
+      batchSize,
+      credentialService,
+    } = this.deps;
 
     const blockedForNotification: Array<{
       publicationId: string;
@@ -84,6 +107,12 @@ export class PublicationSchedulerService {
       if (ids.length === 0) return { enqueued: 0, blocked: 0 };
 
       const destinationByPublication = await publicationsRepo.findDestinationIdsByIds(tx, ids);
+
+      // Attempt-scoped outbox jobIds (C-D6): the enqueue below and the
+      // claim above share this transaction, so the number equals the
+      // attempt the worker will actually start (startAttempt inserts
+      // MAX(attempt_number) + 1). Attempt-less publications get :1.
+      const maxAttemptById = await publicationAttemptsRepo.findMaxAttemptsByIds(tx, ids);
 
       const healthByDestination = new Map<string, MetaCredentialStatus>();
       const uniqueDestinations = new Set(destinationByPublication.values());
@@ -125,9 +154,10 @@ export class PublicationSchedulerService {
           continue;
         }
 
+        const nextAttempt = (maxAttemptById.get(id) ?? 0) + 1;
         await outboxRepo.enqueue(tx, {
           queueName: 'content.publish',
-          jobId: `content.publish:${id}`,
+          jobId: `content.publish:${id}:${nextAttempt}`,
           payload: { publicationId: id },
         });
         enqueued++;
@@ -250,5 +280,95 @@ export class PublicationSchedulerService {
       }
     }
     return recovered;
+  }
+
+  /**
+   * C-D6 automatic retry requeue for publications in RETRY.
+   *
+   * Two writers reach RETRY (ContentPublishService RETRY branch,
+   * PublicationReconcileService RETRY_ELIGIBLE branch); both bump
+   * `updated_at` in the same transaction, so `updated_at` is the
+   * backoff clock. Per candidate, one transaction:
+   *
+   *  1. Exhaustion claim — while still RETRY and the attempt count has
+   *     reached the bound: FAILED + RETRY_EXHAUSTED with exactly one
+   *     notification in the same transaction; alerting after commit.
+   *     Never enqueued again (the J.3 hook matches CREDENTIAL_GATE
+   *     only, so these rows are not picked up there either).
+   *  2. Due-retry claim — while still RETRY, under the bound, and past
+   *     the exponential backoff (`min(max, base * 2^(maxAttempt-1))`):
+   *     flip to SCHEDULED (J.3-style; NO enqueue here). Scan 1 picks
+   *     the row up on a later tick and enqueues with the
+   *     attempt-scoped jobId.
+   *
+   * Uncertain-outcome semantics from package 2 are preserved:
+   * FAILED + CRASH_RECOVERY rows are never touched by this scan, and
+   * the parent content_items row is never modified here.
+   */
+  private async scanDueRetries(): Promise<number> {
+    const {
+      txManager,
+      publicationsRepo,
+      publicationAttemptsRepo,
+      notificationsRepo,
+      alerting,
+      batchSize,
+      retryMaxAttempts,
+      retryBaseDelaySeconds,
+      retryMaxDelaySeconds,
+    } = this.deps;
+
+    const candidates = await publicationsRepo.findRetryCandidates(batchSize);
+
+    let retried = 0;
+    for (const candidate of candidates) {
+      const outcome = await txManager.run(async (tx) => {
+        const maxAttempt = await publicationAttemptsRepo.findMaxAttempt(tx, candidate.id);
+
+        const exhausted = await publicationsRepo.claimRetryExhausted(
+          tx,
+          candidate.id,
+          retryMaxAttempts,
+        );
+        if (exhausted) {
+          const message =
+            `RETRY_EXHAUSTED: publication exhausted its retry budget after ` +
+            `${maxAttempt} attempt(s) (bound ${retryMaxAttempts}) without a successful ` +
+            `publication. The row was moved to FAILED and will not be retried automatically.`;
+          await notificationsRepo.create(tx, {
+            type: 'publication_failure',
+            severity: 'ERROR',
+            title: `Publication ${candidate.id} retry attempts exhausted`,
+            message,
+            publicationId: candidate.id,
+          });
+          return { kind: 'EXHAUSTED' as const, message };
+        }
+
+        if (maxAttempt >= retryMaxAttempts) return { kind: 'SKIP' as const };
+
+        const exponent = Math.max(maxAttempt, 1) - 1;
+        const delaySeconds = Math.min(retryMaxDelaySeconds, retryBaseDelaySeconds * 2 ** exponent);
+        const due = await publicationsRepo.claimRetryDue(
+          tx,
+          candidate.id,
+          retryMaxAttempts,
+          delaySeconds,
+        );
+        return due ? { kind: 'SCHEDULED' as const } : { kind: 'SKIP' as const };
+      });
+
+      if (outcome.kind === 'EXHAUSTED') {
+        this.log.warn(
+          `[publication.schedule] RETRY ${candidate.id} → FAILED (RETRY_EXHAUSTED after ${retryMaxAttempts} attempts)`,
+        );
+        if (alerting) {
+          await alerting.publicationFailed(candidate.id, 'RETRY_EXHAUSTED', outcome.message);
+        }
+      } else if (outcome.kind === 'SCHEDULED') {
+        retried++;
+      }
+    }
+    return retried;
   }
 }

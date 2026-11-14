@@ -283,6 +283,87 @@ export class PublicationsRepository {
   }
 
   /**
+   * Phase 1 of retry requeue (C-D6): plain-read candidates.
+   *
+   * `RETRY` publications ordered by `updated_at` (the backoff clock
+   * starts at the RETRY transition), each with its max attempt number
+   * (0 for anomalous attempt-less rows). No locks; eligibility is
+   * re-evaluated atomically at claim time.
+   */
+  async findRetryCandidates(limit: number): Promise<
+    Array<{
+      id: string;
+      updatedAt: Date;
+      maxAttempt: number;
+    }>
+  > {
+    const rows = await this.db.execute(sql`
+      SELECT p.id, p.updated_at,
+             COALESCE(MAX(pa.attempt_number), 0)::int AS max_attempt
+      FROM publications p
+      LEFT JOIN publication_attempts pa ON pa.publication_id = p.id
+      WHERE p.status = 'RETRY'
+      GROUP BY p.id, p.updated_at
+      ORDER BY p.updated_at ASC
+      LIMIT ${limit}
+    `);
+    return (rows as unknown as Array<{ id: string; updated_at: Date; max_attempt: number }>).map(
+      (r) => ({ id: r.id, updatedAt: r.updated_at, maxAttempt: r.max_attempt }),
+    );
+  }
+
+  /**
+   * Atomic exhaustion claim (C-D6): flips a `RETRY` row to
+   * `FAILED`/`RETRY_EXHAUSTED` only while it is still `RETRY` and its
+   * attempt count has reached the bound. The count is re-derived inside
+   * the UPDATE, so the claim is authoritative even against concurrent
+   * transitions. Exactly one claimer wins.
+   */
+  async claimRetryExhausted(tx: Transaction, id: string, maxAttempts: number): Promise<boolean> {
+    const rows = (await tx.execute(sql`
+      UPDATE publications
+      SET status = 'FAILED',
+          failure_category = 'RETRY_EXHAUSTED',
+          updated_at = now()
+      WHERE id = ${id}
+        AND status = 'RETRY'
+        AND (SELECT COALESCE(MAX(attempt_number), 0)
+             FROM publication_attempts WHERE publication_id = ${id}) >= ${maxAttempts}
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.length === 1;
+  }
+
+  /**
+   * Atomic due-retry claim (C-D6): flips a `RETRY` row back to
+   * `SCHEDULED` only while it is still `RETRY`, still under the attempt
+   * bound, and past the backoff delay. The attempt count is re-derived
+   * inside the UPDATE and the caller passes the delay computed from the
+   * same in-transaction read. Scan 1 picks the row up on a later tick
+   * (credential gate + attempt-scoped outbox enqueue); no enqueue here.
+   */
+  async claimRetryDue(
+    tx: Transaction,
+    id: string,
+    maxAttempts: number,
+    delaySeconds: number,
+  ): Promise<boolean> {
+    const rows = (await tx.execute(sql`
+      UPDATE publications
+      SET status = 'SCHEDULED',
+          scheduled_at = now(),
+          updated_at = now()
+      WHERE id = ${id}
+        AND status = 'RETRY'
+        AND (SELECT COALESCE(MAX(attempt_number), 0)
+             FROM publication_attempts WHERE publication_id = ${id}) < ${maxAttempts}
+        AND updated_at <= now() - (${delaySeconds} * interval '1 second')
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.length === 1;
+  }
+
+  /**
    * Requeue publications whose only failure was the scheduler's
    * credential gate, after a credential for the destination has been
    * stored. Idempotent: a second run finds no FAILED+CREDENTIAL_GATE

@@ -1,4 +1,4 @@
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { publicationAttempts } from '../schema/publication/publication-attempts.js';
 import type { Database, Transaction } from '../transaction/transaction-manager.js';
 
@@ -84,5 +84,47 @@ export class PublicationAttemptsRepository {
       .from(publicationAttempts)
       .where(eq(publicationAttempts.publicationId, publicationId));
     return row?.count ?? 0;
+  }
+
+  /**
+   * Batch max-attempt lookup for a set of publication IDs (GROUP BY,
+   * one round trip). Publications with no attempts are omitted; callers
+   * treating absence as 0 must default explicitly.
+   */
+  async findMaxAttemptsByIds(
+    tx: Transaction,
+    ids: readonly string[],
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (ids.length === 0) return result;
+    const rows = await tx
+      .select({
+        publicationId: publicationAttempts.publicationId,
+        maxAttempt: sql<number>`MAX(${publicationAttempts.attemptNumber})::int`,
+      })
+      .from(publicationAttempts)
+      .where(inArray(publicationAttempts.publicationId, [...ids]))
+      .groupBy(publicationAttempts.publicationId);
+    for (const row of rows) {
+      result.set(row.publicationId, row.maxAttempt);
+    }
+    return result;
+  }
+
+  /**
+   * In-transaction max-attempt read for a single publication
+   * (`COALESCE(MAX(attempt_number), 0)`; 0 for anomalous attempt-less
+   * rows). While a publication stays in `RETRY` no new attempt can start
+   * (`claimForPublishing` requires another status), so the value is
+   * stable within the claim transaction.
+   */
+  async findMaxAttempt(tx: Transaction, publicationId: string): Promise<number> {
+    const [row] = await tx
+      .select({
+        maxAttempt: sql<number>`COALESCE(MAX(${publicationAttempts.attemptNumber}), 0)::int`,
+      })
+      .from(publicationAttempts)
+      .where(eq(publicationAttempts.publicationId, publicationId));
+    return row?.maxAttempt ?? 0;
   }
 }

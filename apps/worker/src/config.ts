@@ -31,6 +31,13 @@ export interface WorkerConfig {
   publicationScheduleIntervalMs: number;
   publicationScheduleBatchSize: number;
   publicationReconcileStaleThresholdSeconds: number;
+  /**
+   * C-D6 retry requeue bounds: max attempts, first backoff interval,
+   * backoff cap (all seconds). See PublicationSchedulerServiceDeps.
+   */
+  publicationRetryMaxAttempts: number;
+  publicationRetryBaseDelaySeconds: number;
+  publicationRetryMaxDelaySeconds: number;
 
   // Interaction response scheduler
   interactionResponseScheduleIntervalMs: number;
@@ -111,6 +118,9 @@ export function loadWorkerConfig(): WorkerConfig {
       'PUBLICATION_RECONCILE_STALE_THRESHOLD_SECONDS',
       300,
     ),
+    publicationRetryMaxAttempts: optionalInt('PUBLICATION_RETRY_MAX_ATTEMPTS', 5),
+    publicationRetryBaseDelaySeconds: optionalInt('PUBLICATION_RETRY_BASE_DELAY_SECONDS', 60),
+    publicationRetryMaxDelaySeconds: optionalInt('PUBLICATION_RETRY_MAX_DELAY_SECONDS', 3600),
 
     interactionResponseScheduleIntervalMs: optionalInt(
       'INTERACTION_RESPONSE_SCHEDULE_INTERVAL_MS',

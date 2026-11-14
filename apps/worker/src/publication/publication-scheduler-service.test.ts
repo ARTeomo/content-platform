@@ -60,6 +60,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     credentialService: MetaCredentialService;
     alerting?: AlertingService;
     notificationDedupWindowMs?: number;
+    retry?: { maxAttempts?: number; baseDelaySeconds?: number; maxDelaySeconds?: number };
   }): PublicationSchedulerService {
     return new PublicationSchedulerService({
       txManager,
@@ -69,6 +70,9 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       outboxRepo,
       batchSize: 10,
       staleThresholdSeconds: 300,
+      retryMaxAttempts: options.retry?.maxAttempts ?? 5,
+      retryBaseDelaySeconds: options.retry?.baseDelaySeconds ?? 60,
+      retryMaxDelaySeconds: options.retry?.maxDelaySeconds ?? 3600,
       credentialService: options.credentialService,
       ...(options.alerting !== undefined && { alerting: options.alerting }),
       ...(options.notificationDedupWindowMs !== undefined && {
@@ -228,7 +232,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     `;
     expect(jobs).toHaveLength(1);
     expect(jobs[0]!.queue_name).toBe('content.publish');
-    expect(jobs[0]!.job_id).toBe(`content.publish:${id}`);
+    expect(jobs[0]!.job_id).toBe(`content.publish:${id}:1`);
   });
 
   it('does not claim a SCHEDULED publication whose time has not yet arrived', async () => {
@@ -271,7 +275,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     expect((await scheduler.runOnce()).scheduledCount).toBe(1);
     expect((await scheduler.runOnce()).scheduledCount).toBe(0);
     const [row] = await client.sql<{ c: number }[]>`
-      SELECT COUNT(*)::int AS c FROM outbox_jobs WHERE job_id = ${'content.publish:' + id}
+      SELECT COUNT(*)::int AS c FROM outbox_jobs WHERE job_id = ${'content.publish:' + id + ':1'}
     `;
     expect(row!.c).toBe(1);
   });
@@ -619,6 +623,9 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
       outboxRepo,
       batchSize: 10,
       staleThresholdSeconds: 300,
+      retryMaxAttempts: 5,
+      retryBaseDelaySeconds: 60,
+      retryMaxDelaySeconds: 3600,
       credentialService: permissiveCredentialService(),
     });
 
@@ -638,6 +645,207 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     expect(await getPublicationStatus(id)).toBe('FAILED');
     expect(await getPublicationFailureCategory(id)).toBe('CRASH_RECOVERY');
     expect(await countNotifications(id)).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------
+  // Retry requeue (C-D6) tests
+  // ---------------------------------------------------------------------
+
+  async function createRetryPublication(input: {
+    maxAttempt: number;
+    updatedAtAgoSeconds: number;
+  }): Promise<string> {
+    const id = await createPublication({
+      status: 'SCHEDULED',
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    for (let n = 1; n <= input.maxAttempt; n++) {
+      await client.sql`
+        INSERT INTO publication_attempts
+          (publication_id, attempt_number, status, started_at, finished_at)
+        VALUES (${id}, ${n}, 'FAILED', now(), now())
+      `;
+    }
+    await client.sql`
+      UPDATE publications SET status = 'RETRY', updated_at = now() WHERE id = ${id}
+    `;
+    await client.sql`
+      UPDATE publications
+      SET updated_at = now() - (${input.updatedAtAgoSeconds} * interval '1 second')
+      WHERE id = ${id}
+    `;
+    return id;
+  }
+
+  async function listOutboxJobIds(): Promise<string[]> {
+    const rows = await client.sql<{ job_id: string }[]>`
+      SELECT job_id FROM outbox_jobs ORDER BY job_id
+    `;
+    return rows.map((r) => r.job_id);
+  }
+
+  it('retry: due RETRY flips to SCHEDULED, next tick enqueues content.publish:{id}:2 without colliding with the retained :1 row', async () => {
+    const id = await createRetryPublication({ maxAttempt: 1, updatedAtAgoSeconds: 120 });
+    // The first attempt's DISPATCHED outbox row survives the 7-day
+    // cleanup retention — requeue must not collide with it.
+    await client.sql`
+      INSERT INTO outbox_jobs (job_id, queue_name, payload, status, dispatched_at)
+      VALUES (${`content.publish:${id}:1`}, 'content.publish', '{}'::jsonb, 'DISPATCHED', now())
+    `;
+    const parentBefore = await getContentItemSnapshot();
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const first = await scheduler.runOnce();
+    expect(first.retriedCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('SCHEDULED');
+    expect(await listOutboxJobIds()).toEqual([`content.publish:${id}:1`]);
+
+    const second = await scheduler.runOnce();
+    expect(second.scheduledCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('RESERVED');
+    expect(await listOutboxJobIds()).toEqual([
+      `content.publish:${id}:1`,
+      `content.publish:${id}:2`,
+    ]);
+
+    // jobId number == the attempt the worker will actually start.
+    const attempt = await txManager.run(async (tx) => publicationAttemptsRepo.startAttempt(tx, id));
+    expect(attempt.attemptNumber).toBe(2);
+    expect(await getContentItemSnapshot()).toEqual(parentBefore);
+  });
+
+  it('retry: exhaustion boundary — maxAttempt=4 is eligible, maxAttempt=5 is FAILED/RETRY_EXHAUSTED with exactly one notification and no outbox row', async () => {
+    // maxAttempt=4 → backoff 60 * 2^3 = 480s; backdate past it.
+    const eligible = await createRetryPublication({ maxAttempt: 4, updatedAtAgoSeconds: 600 });
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    expect((await scheduler.runOnce()).retriedCount).toBe(1);
+    expect(await getPublicationStatus(eligible)).toBe('SCHEDULED');
+    expect((await scheduler.runOnce()).scheduledCount).toBe(1);
+    expect((await listOutboxJobIds()).sort()).toEqual([`content.publish:${eligible}:5`]);
+
+    const exhausted = await createRetryPublication({ maxAttempt: 5, updatedAtAgoSeconds: 400 });
+    const secondScheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    expect((await secondScheduler.runOnce()).retriedCount).toBe(0);
+    expect(await getPublicationStatus(exhausted)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(exhausted)).toBe('RETRY_EXHAUSTED');
+    expect(await listOutboxJobIds()).toEqual([`content.publish:${eligible}:5`]);
+
+    const [note] = await client.sql<
+      { type: string; message: string; resolved_at: string | null }[]
+    >`
+      SELECT type, message, resolved_at FROM notifications WHERE publication_id = ${exhausted}
+    `;
+    expect(note!.type).toBe('publication_failure');
+    expect(note!.message).toContain('RETRY_EXHAUSTED');
+    expect(note!.message).toContain('5 attempt(s)');
+    expect(note!.resolved_at).toBeNull();
+    expect(await countNotifications(exhausted)).toBe(1);
+  });
+
+  it('retry: a re-enqueued row blocked by the credential gate becomes FAILED/CREDENTIAL_GATE with no enqueue', async () => {
+    const id = await createRetryPublication({ maxAttempt: 1, updatedAtAgoSeconds: 120 });
+    const scheduler = buildScheduler({
+      credentialService: makeCredentialService({ [destinationId]: 'INVALID' }),
+    });
+
+    expect((await scheduler.runOnce()).retriedCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('SCHEDULED');
+
+    const second = await scheduler.runOnce();
+    expect(second.blockedByCredentialCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CREDENTIAL_GATE');
+    expect(await listOutboxJobIds()).toEqual([]);
+  });
+
+  it('retry: J.3 credential-gate requeue feeds scan 1 with the attempt-scoped jobId', async () => {
+    const id = await createRetryPublication({ maxAttempt: 1, updatedAtAgoSeconds: 120 });
+    await client.sql`
+      UPDATE publications SET status = 'FAILED', failure_category = 'CREDENTIAL_GATE'
+      WHERE id = ${id}
+    `;
+
+    const requeued = await txManager.run(async (tx) =>
+      publicationsRepo.requeueCredentialGateFailures(tx, destinationId),
+    );
+    expect(requeued).toEqual([id]);
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const result = await scheduler.runOnce();
+    expect(result.scheduledCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('RESERVED');
+    expect(await listOutboxJobIds()).toEqual([`content.publish:${id}:2`]);
+  });
+
+  it('retry: FAILED + CRASH_RECOVERY rows are untouched by the retry scan', async () => {
+    const id = await createRetryPublication({ maxAttempt: 1, updatedAtAgoSeconds: 120 });
+    await client.sql`
+      UPDATE publications SET status = 'FAILED', failure_category = 'CRASH_RECOVERY', updated_at = now()
+      WHERE id = ${id}
+    `;
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const result = await scheduler.runOnce();
+
+    expect(result.retriedCount).toBe(0);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CRASH_RECOVERY');
+    expect(await listOutboxJobIds()).toEqual([]);
+  });
+
+  it('retry: a not-yet-due row stays RETRY (backoff boundary)', async () => {
+    const id = await createRetryPublication({ maxAttempt: 1, updatedAtAgoSeconds: 30 });
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    const result = await scheduler.runOnce();
+
+    expect(result.retriedCount).toBe(0);
+    expect(await getPublicationStatus(id)).toBe('RETRY');
+    expect(await listOutboxJobIds()).toEqual([]);
+  });
+
+  it('retry: concurrent executions flip a due retry exactly once', async () => {
+    const id = await createRetryPublication({ maxAttempt: 1, updatedAtAgoSeconds: 120 });
+
+    const [first, second] = await Promise.all([
+      buildScheduler({ credentialService: permissiveCredentialService() }).runOnce(),
+      buildScheduler({ credentialService: permissiveCredentialService() }).runOnce(),
+    ]);
+
+    expect(first.retriedCount + second.retriedCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('SCHEDULED');
+  });
+
+  it('retry: a zero-attempt RETRY row is eligible and enqueues :1', async () => {
+    const id = await createPublication({
+      status: 'SCHEDULED',
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+    await client.sql`
+      UPDATE publications SET status = 'RETRY', updated_at = now() - (120 * interval '1 second')
+      WHERE id = ${id}
+    `;
+
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    expect((await scheduler.runOnce()).retriedCount).toBe(1);
+    expect((await scheduler.runOnce()).scheduledCount).toBe(1);
+    expect(await listOutboxJobIds()).toEqual([`content.publish:${id}:1`]);
+  });
+
+  it('retry: batch max-attempt helper maps ids and omits attempt-less publications', async () => {
+    const withAttempts = await createRetryPublication({ maxAttempt: 3, updatedAtAgoSeconds: 10 });
+    const attemptLess = await createPublication({
+      status: 'SCHEDULED',
+      scheduledAt: new Date(Date.now() - 60_000),
+    });
+
+    const map = await txManager.run(async (tx) =>
+      publicationAttemptsRepo.findMaxAttemptsByIds(tx, [withAttempts, attemptLess]),
+    );
+
+    expect(map.get(withAttempts)).toBe(3);
+    expect(map.has(attemptLess)).toBe(false);
+    expect((map.get(attemptLess) ?? 0) + 1).toBe(1);
   });
 });
 

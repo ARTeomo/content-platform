@@ -23,6 +23,7 @@ export interface ContentPublishServiceDeps {
 interface PublicationContextRow {
   publication_id: string;
   publication_status: string;
+  content_id: string;
   destination_id: string;
   publication_candidate_id: string;
   external_post_id: string | null;
@@ -102,6 +103,40 @@ export class ContentPublishService {
             at,
           );
           await this.deps.attemptsRepo.finishSuccess(tx, attempt.id, at, result.externalPostId);
+          // First-success rule (owner decision 2026-11-14): the parent
+          // content item flips to PUBLISHED on the first successful
+          // destination publication. `COALESCE` keeps the earliest
+          // timestamp when further destinations succeed later.
+          const parent = (await tx.execute(sql`
+            UPDATE content_items
+            SET status = 'PUBLISHED',
+                published_at = COALESCE(published_at, ${at.toISOString()}::timestamptz),
+                updated_at = now()
+            WHERE id = ${context.contentId}
+            RETURNING id
+          `)) as unknown as Array<{ id: string }>;
+          if (parent.length === 0) {
+            // Parent missing: the external post is real, so the
+            // publication success stands; only the parent flip is lost.
+            this.log.warn(
+              `[content.publish] publication ${publicationId} succeeded but parent content item ${context.contentId} is missing; publication success retained`,
+            );
+          }
+          // Resolve prior open failure notifications for this
+          // content/destination pair (is_read untouched).
+          await tx.execute(sql`
+            UPDATE notifications
+            SET resolved_at = now()
+            WHERE resolved_at IS NULL
+              AND type = 'publication_failure'
+              AND publication_id IN (
+                SELECT p.id
+                FROM publications p
+                INNER JOIN publication_candidates pc ON pc.id = p.publication_candidate_id
+                WHERE pc.content_id = ${context.contentId}
+                  AND p.destination_id = ${context.destinationId}
+              )
+          `);
         });
         this.log.info(
           `[content.publish] publication ${publicationId} → PUBLISHED (${result.externalPostId})`,
@@ -185,6 +220,7 @@ export class ContentPublishService {
       SELECT
         p.id                       AS publication_id,
         p.status                   AS publication_status,
+        c.content_id               AS content_id,
         p.destination_id           AS destination_id,
         p.publication_candidate_id AS publication_candidate_id,
         p.external_post_id         AS external_post_id,
@@ -211,6 +247,7 @@ export class ContentPublishService {
     return {
       publicationId: row.publication_id,
       publicationStatus: row.publication_status,
+      contentId: row.content_id,
       destinationId: row.destination_id,
       publicationCandidateId: row.publication_candidate_id,
       externalPostId: row.external_post_id,

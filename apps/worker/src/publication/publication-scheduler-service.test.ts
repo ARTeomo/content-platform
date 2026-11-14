@@ -147,6 +147,13 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     return row!.status;
   }
 
+  async function getPublicationFailureCategory(id: string): Promise<string | null> {
+    const [row] = await client.sql<{ failure_category: string | null }[]>`
+      SELECT failure_category FROM publications WHERE id = ${id}
+    `;
+    return row!.failure_category;
+  }
+
   async function countOutbox(): Promise<number> {
     const [row] = await client.sql<{ c: number }[]>`
       SELECT COUNT(*)::int AS c FROM outbox_jobs
@@ -236,6 +243,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     expect(result.scheduledCount).toBe(0);
     expect(result.blockedByCredentialCount).toBe(1);
     expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CREDENTIAL_GATE');
     expect(await countOutbox()).toBe(0);
   });
 
@@ -251,6 +259,7 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     expect(result.scheduledCount).toBe(0);
     expect(result.blockedByCredentialCount).toBe(1);
     expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CREDENTIAL_GATE');
     expect(await countOutbox()).toBe(0);
   });
 

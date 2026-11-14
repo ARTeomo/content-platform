@@ -32,6 +32,7 @@ export const notifications = pgTable(
     isRead: boolean('is_read').notNull().default(false),
     createdAt: createdAtColumn(),
     readAt: nullableTimestampColumn('read_at'),
+    resolvedAt: nullableTimestampColumn('resolved_at'),
   },
   (table) => [
     index('notifications_is_read_idx').on(table.isRead),

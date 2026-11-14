@@ -347,6 +347,70 @@ describe.skipIf(!TEST_DB_URL)('MetaCredentialService', () => {
     expect(report.overall).toBe('UNKNOWN');
     expect(report.credentials).toHaveLength(0);
   });
+
+  it('storeCredential invokes onCredentialStored with the destination inside the same transaction', async () => {
+    const keys = new Map<number, Buffer>();
+    keys.set(1, randomBytes(32));
+    const encryption = new CredentialEncryptionProvider({ keys, activeVersion: 1 });
+
+    const hookCalls: Array<{ destinationId: string }> = [];
+    const hookedService = new MetaCredentialService(
+      new TransactionManager(client.db),
+      repo,
+      encryption,
+      new FakeMetaGraphClient(),
+      { appId: 'test-app-id', appSecret: 'test-app-secret' },
+      {
+        onCredentialStored: async (_tx, ctx) => {
+          // The hook observes the credential row: the enclosing
+          // transaction must have committed the upsert before the
+          // outer storeCredential resolves, and the hook itself runs
+          // inside that transaction.
+          hookCalls.push(ctx);
+        },
+      },
+    );
+
+    await hookedService.storeCredential({
+      scope: 'DESTINATION',
+      destinationId,
+      credentialType: 'PAGE_ACCESS_TOKEN',
+      plaintextValue: 'hook-token',
+      status: 'VALID',
+    });
+
+    expect(hookCalls).toEqual([{ destinationId }]);
+  });
+
+  it('storeCredential does not invoke onCredentialStored for APP scope', async () => {
+    const keys = new Map<number, Buffer>();
+    keys.set(1, randomBytes(32));
+    const encryption = new CredentialEncryptionProvider({ keys, activeVersion: 1 });
+
+    let hookCalls = 0;
+    const hookedService = new MetaCredentialService(
+      new TransactionManager(client.db),
+      repo,
+      encryption,
+      new FakeMetaGraphClient(),
+      { appId: 'test-app-id', appSecret: 'test-app-secret' },
+      {
+        onCredentialStored: async () => {
+          hookCalls++;
+        },
+      },
+    );
+
+    await hookedService.storeCredential({
+      scope: 'APP',
+      destinationId: null,
+      credentialType: 'APP_SECRET',
+      plaintextValue: 'app-secret-value',
+      status: 'VALID',
+    });
+
+    expect(hookCalls).toBe(0);
+  });
 });
 
 async function ensureDestination(client: DatabaseClient, marker: string): Promise<string> {

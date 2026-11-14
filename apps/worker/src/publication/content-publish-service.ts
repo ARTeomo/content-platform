@@ -95,14 +95,24 @@ export class ContentPublishService {
 
     switch (result.status) {
       case 'SUCCESS': {
-        await this.deps.txManager.run(async (tx) => {
-          await this.deps.publicationsRepo.markPublished(
+        // The success claim is conditional (C-D5): the row may have been
+        // claimed by crash recovery (FAILED + CRASH_RECOVERY) while the
+        // external call was in flight. The recovery carve-out records a
+        // confirmed external post instead of discarding it; any other
+        // state (real failure, credential gate, RECONCILIATION,
+        // already PUBLISHED) refuses the transition. The attempt ledger
+        // is finalized either way — it truthfully records this execution's
+        // external outcome, including the external post id.
+        const publicationClaimed = await this.deps.txManager.run(async (tx) => {
+          const won = await this.deps.publicationsRepo.claimPublished(
             tx,
             publicationId,
             result.externalPostId,
             at,
           );
           await this.deps.attemptsRepo.finishSuccess(tx, attempt.id, at, result.externalPostId);
+          if (!won) return false;
+
           // First-success rule (owner decision 2026-11-14): the parent
           // content item flips to PUBLISHED on the first successful
           // destination publication. `COALESCE` keeps the earliest
@@ -137,7 +147,20 @@ export class ContentPublishService {
                   AND p.destination_id = ${context.destinationId}
               )
           `);
+          return true;
         });
+
+        if (!publicationClaimed) {
+          // Another lifecycle path owns the row. The confirmed external
+          // post stays on the attempt ledger (finishSuccess above); the
+          // operator-facing signal is this warning plus any reconciliation
+          // path the owning state already has.
+          this.log.warn(
+            `[content.publish] publication ${publicationId}: success at Meta (${result.externalPostId}) could not be recorded on the publication row (owned by another lifecycle state); outcome retained on the attempt ledger`,
+          );
+          return { status: 'PUBLISHED', externalPostId: result.externalPostId };
+        }
+
         this.log.info(
           `[content.publish] publication ${publicationId} → PUBLISHED (${result.externalPostId})`,
         );

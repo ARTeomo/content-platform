@@ -217,6 +217,56 @@ describe.skipIf(!TEST_DB_URL)('PublicationsRepository', () => {
     expect(row.status).toBe('FAILED');
     expect(row.failure_category).toBe('CRASH_RECOVERY');
   });
+
+  // ---------------------------------------------------------------------
+  // Atomic success claim (C-D5 late-success race fix)
+  // ---------------------------------------------------------------------
+
+  async function claimPublishedFrom(id: string): Promise<boolean> {
+    return await txManager.run(async (tx) =>
+      repo.claimPublished(tx, id, 'ext-post-race', new Date('2026-11-14T12:00:00Z')),
+    );
+  }
+
+  it('claimPublished succeeds from IN_PROGRESS and from FAILED + CRASH_RECOVERY only', async () => {
+    // Own execution state: allowed.
+    const inProgress = await createInProgressPublication(10);
+    expect(await claimPublishedFrom(inProgress)).toBe(true);
+    let row = await getPublication(inProgress);
+    expect(row.status).toBe('PUBLISHED');
+    expect(row.failure_category).toBeNull();
+
+    // Crash-recovery-claimed row: the confirmed external post is
+    // recorded rather than discarded.
+    const recoveryClaimed = await createInProgressPublication(3_600);
+    await txManager.run(async (tx) => repo.claimStaleInProgress(tx, recoveryClaimed, 300));
+    expect(await claimPublishedFrom(recoveryClaimed)).toBe(true);
+    row = await getPublication(recoveryClaimed);
+    expect(row.status).toBe('PUBLISHED');
+    expect(row.failure_category).toBeNull();
+
+    // Second claim (already PUBLISHED): refused.
+    expect(await claimPublishedFrom(recoveryClaimed)).toBe(false);
+  });
+
+  it('claimPublished refuses real failures, credential-gate failures, and RECONCILIATION rows', async () => {
+    const plainFailed = await createFailedPublication(await createCandidate(), destinationId, null);
+    const gateFailed = await createFailedPublication(
+      await createCandidate(),
+      destinationId,
+      'CREDENTIAL_GATE',
+    );
+    const reconciliation = await createInProgressPublication(10);
+    await client.sql`UPDATE publications SET status = 'RECONCILIATION' WHERE id = ${reconciliation}`;
+
+    expect(await claimPublishedFrom(plainFailed)).toBe(false);
+    expect(await claimPublishedFrom(gateFailed)).toBe(false);
+    expect(await claimPublishedFrom(reconciliation)).toBe(false);
+
+    expect((await getPublication(plainFailed)).status).toBe('FAILED');
+    expect((await getPublication(gateFailed)).failure_category).toBe('CREDENTIAL_GATE');
+    expect((await getPublication(reconciliation)).status).toBe('RECONCILIATION');
+  });
 });
 
 // ---------------------------------------------------------------------------

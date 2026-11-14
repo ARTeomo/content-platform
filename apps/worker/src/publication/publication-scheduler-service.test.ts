@@ -590,6 +590,55 @@ describe.skipIf(!TEST_DB_URL)('PublicationSchedulerService', () => {
     expect(await getPublicationFailureCategory(id)).toBe('CRASH_RECOVERY');
     expect(await countNotifications(id)).toBe(1);
   });
+
+  it('recovery: a failure inside the recovery transaction rolls the claim back; the next scan succeeds', async () => {
+    const id = await createPublication({ status: 'IN_PROGRESS', updatedAtAgoSeconds: 3_600 });
+    await createPendingAttempt(id);
+
+    // Notification writer that fails once, then delegates to the real
+    // repository — the claim, attempt finalization, and notification are
+    // one transaction, so the injected failure must roll everything back.
+    let injected = true;
+    const failingNotificationsRepo = {
+      create: async (
+        ...args: Parameters<NotificationsRepository['create']>
+      ): ReturnType<NotificationsRepository['create']> => {
+        if (injected) {
+          injected = false;
+          throw new Error('injected notification failure');
+        }
+        return notificationsRepo.create(...args);
+      },
+    } as NotificationsRepository;
+
+    const failingScheduler = new PublicationSchedulerService({
+      txManager,
+      publicationsRepo,
+      publicationAttemptsRepo,
+      notificationsRepo: failingNotificationsRepo,
+      outboxRepo,
+      batchSize: 10,
+      staleThresholdSeconds: 300,
+      credentialService: permissiveCredentialService(),
+    });
+
+    await expect(failingScheduler.runOnce()).rejects.toThrow('injected notification failure');
+
+    // Rolled back completely: the row is still a stale IN_PROGRESS
+    // candidate with its PENDING attempt and no notification.
+    expect(await getPublicationStatus(id)).toBe('IN_PROGRESS');
+    const attempt = await getLatestAttempt(id);
+    expect(attempt.status).toBe('PENDING');
+    expect(attempt.finished_at).toBeNull();
+    expect(await countNotifications(id)).toBe(0);
+
+    // Next scan recovers it cleanly.
+    const scheduler = buildScheduler({ credentialService: permissiveCredentialService() });
+    expect((await scheduler.runOnce()).recoveredCount).toBe(1);
+    expect(await getPublicationStatus(id)).toBe('FAILED');
+    expect(await getPublicationFailureCategory(id)).toBe('CRASH_RECOVERY');
+    expect(await countNotifications(id)).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

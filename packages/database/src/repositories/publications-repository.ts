@@ -250,6 +250,39 @@ export class PublicationsRepository {
   }
 
   /**
+   * Atomic success claim (C-D5 race fix).
+   *
+   * Transitions the publication to PUBLISHED only from states the success
+   * path may own: its own execution state (IN_PROGRESS), or a row already
+   * claimed by crash recovery (FAILED + CRASH_RECOVERY) — in the latter
+   * case the confirmed external post is recorded rather than discarded
+   * and the superseded recovery category is cleared. Real failures (FAILED
+   * without the recovery category), credential-gate failures,
+   * RECONCILIATION rows, and already-PUBLISHED rows are refused: a late
+   * success must never blindly overwrite another lifecycle path's state.
+   * Exactly one concurrent writer wins the RETURNING row.
+   */
+  async claimPublished(
+    tx: Transaction,
+    id: string,
+    externalPostId: string,
+    publishedAt: Date,
+  ): Promise<boolean> {
+    const rows = (await tx.execute(sql`
+      UPDATE publications
+      SET status = 'PUBLISHED',
+          external_post_id = ${externalPostId},
+          published_at = ${publishedAt.toISOString()}::timestamptz,
+          failure_category = NULL,
+          updated_at = now()
+      WHERE id = ${id}
+        AND (status = 'IN_PROGRESS' OR (status = 'FAILED' AND failure_category = 'CRASH_RECOVERY'))
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.length === 1;
+  }
+
+  /**
    * Requeue publications whose only failure was the scheduler's
    * credential gate, after a credential for the destination has been
    * stored. Idempotent: a second run finds no FAILED+CREDENTIAL_GATE

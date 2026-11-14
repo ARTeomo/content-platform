@@ -192,6 +192,148 @@ describe.skipIf(!TEST_DB_URL)('ContentPublishService', () => {
     expect(afterSecond[0]!.status).toBe('PUBLISHED');
     expect(afterSecond[0]!.published_at).toBe(firstTs);
   });
+
+  // ---------------------------------------------------------------------
+  // Late-success race (C-D5): recovery claim vs. in-flight Meta success
+  // ---------------------------------------------------------------------
+
+  function makeGatedAdapter(): {
+    adapter: MetaPublisherAdapter;
+    release: (externalPostId: string) => void;
+  } {
+    let release!: (externalPostId: string) => void;
+    const gate = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    const adapter = {
+      postToPage: async () => ({ status: 'SUCCESS' as const, externalPostId: await gate }),
+    } as unknown as MetaPublisherAdapter;
+    return { adapter, release };
+  }
+
+  async function waitForPublicationStatus(
+    id: string,
+    status: string,
+    timeoutMs = 8_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [row] = await client.sql<{ status: string }[]>`
+        SELECT status FROM publications WHERE id = ${id}
+      `;
+      if (row!.status === status) return;
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for status ${status}; current=${row!.status}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  it('race: a confirmed success landing AFTER a crash-recovery claim is recorded, not discarded', async () => {
+    const publicationId = await createScheduledPublication({
+      destinationId,
+      contentItemId,
+    });
+    const { adapter, release } = makeGatedAdapter();
+    const service = buildService(adapter);
+
+    const pending = service.publish({ publicationId });
+    // The execution has claimed the row; Meta is still in flight.
+    await waitForPublicationStatus(publicationId, 'IN_PROGRESS');
+    // Crash recovery wins the row while the external call is unresolved.
+    await client.sql`
+      UPDATE publications
+      SET status = 'FAILED', failure_category = 'CRASH_RECOVERY', updated_at = now()
+      WHERE id = ${publicationId}
+    `;
+    const recoveryNotificationId = await createFailureNotification(publicationId);
+
+    release('ext-late-success');
+    const outcome = await pending;
+
+    expect(outcome).toEqual({ status: 'PUBLISHED', externalPostId: 'ext-late-success' });
+
+    const pub = await client.sql<
+      { status: string; external_post_id: string | null; failure_category: string | null }[]
+    >`
+      SELECT status, external_post_id, failure_category FROM publications WHERE id = ${publicationId}
+    `;
+    expect(pub[0]!.status).toBe('PUBLISHED');
+    expect(pub[0]!.external_post_id).toBe('ext-late-success');
+    expect(pub[0]!.failure_category).toBeNull();
+
+    const attempt = await client.sql<
+      { status: string; external_post_id: string | null; error_category: string | null }[]
+    >`
+      SELECT status, external_post_id, error_category FROM publication_attempts
+      WHERE publication_id = ${publicationId}
+    `;
+    expect(attempt[0]!.status).toBe('SUCCESS');
+    expect(attempt[0]!.external_post_id).toBe('ext-late-success');
+
+    const item = await client.sql<{ status: string; published_at: string | null }[]>`
+      SELECT status, published_at FROM content_items WHERE id = ${contentItemId}
+    `;
+    expect(item[0]!.status).toBe('PUBLISHED');
+    expect(item[0]!.published_at).not.toBeNull();
+
+    // The recovery-scoped failure notification is resolved by the success.
+    const note = await client.sql<{ resolved_at: string | null }[]>`
+      SELECT resolved_at FROM notifications WHERE id = ${recoveryNotificationId}
+    `;
+    expect(note[0]!.resolved_at).not.toBeNull();
+  });
+
+  it('race: a late success is refused against a real FAILED publication (no blind overwrite)', async () => {
+    const publicationId = await createScheduledPublication({
+      destinationId,
+      contentItemId,
+    });
+    const { adapter, release } = makeGatedAdapter();
+    const warnSpy = vi.fn();
+    const service = buildService(adapter, { warn: warnSpy });
+
+    const pending = service.publish({ publicationId });
+    await waitForPublicationStatus(publicationId, 'IN_PROGRESS');
+    // A genuine failure (no recovery category) owns the row now.
+    await client.sql`
+      UPDATE publications
+      SET status = 'FAILED', failure_category = NULL, updated_at = now()
+      WHERE id = ${publicationId}
+    `;
+
+    release('ext-lost-race');
+    const outcome = await pending;
+
+    expect(outcome).toEqual({ status: 'PUBLISHED', externalPostId: 'ext-lost-race' });
+
+    const pub = await client.sql<
+      { status: string; external_post_id: string | null; failure_category: string | null }[]
+    >`
+      SELECT status, external_post_id, failure_category FROM publications WHERE id = ${publicationId}
+    `;
+    expect(pub[0]!.status).toBe('FAILED');
+    expect(pub[0]!.external_post_id).toBeNull();
+    expect(pub[0]!.failure_category).toBeNull();
+
+    // The confirmed external outcome is retained on the attempt ledger.
+    const attempt = await client.sql<{ status: string; external_post_id: string | null }[]>`
+      SELECT status, external_post_id FROM publication_attempts WHERE publication_id = ${publicationId}
+    `;
+    expect(attempt[0]!.status).toBe('SUCCESS');
+    expect(attempt[0]!.external_post_id).toBe('ext-lost-race');
+
+    // Parent untouched — this was not a recorded publication success.
+    const item = await client.sql<{ status: string; published_at: string | null }[]>`
+      SELECT status, published_at FROM content_items WHERE id = ${contentItemId}
+    `;
+    expect(item[0]!.status).toBe('DRAFT');
+    expect(item[0]!.published_at).toBeNull();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('could not be recorded on the publication row'),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

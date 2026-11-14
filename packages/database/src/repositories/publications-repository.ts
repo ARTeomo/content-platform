@@ -194,10 +194,14 @@ export class PublicationsRepository {
       .where(eq(publications.id, id));
   }
 
-  async markFailed(tx: Transaction, id: string): Promise<void> {
+  async markFailed(tx: Transaction, id: string, failureCategory?: string): Promise<void> {
     await tx
       .update(publications)
-      .set({ status: 'FAILED', updatedAt: new Date() })
+      .set({
+        status: 'FAILED',
+        updatedAt: new Date(),
+        ...(failureCategory !== undefined && { failureCategory }),
+      })
       .where(eq(publications.id, id));
   }
 
@@ -206,6 +210,27 @@ export class PublicationsRepository {
       .update(publications)
       .set({ status: 'RECONCILIATION', updatedAt: new Date() })
       .where(eq(publications.id, id));
+  }
+
+  /**
+   * Requeue publications whose only failure was the scheduler's
+   * credential gate, after a credential for the destination has been
+   * stored. Idempotent: a second run finds no FAILED+CREDENTIAL_GATE
+   * rows for the destination. Returns the requeued publication ids.
+   */
+  async requeueCredentialGateFailures(tx: Transaction, destinationId: string): Promise<string[]> {
+    const rows = (await tx.execute(sql`
+      UPDATE publications
+      SET status = 'SCHEDULED',
+          scheduled_at = now(),
+          failure_category = NULL,
+          updated_at = now()
+      WHERE destination_id = ${destinationId}
+        AND status = 'FAILED'
+        AND failure_category = 'CREDENTIAL_GATE'
+      RETURNING id
+    `)) as unknown as Array<{ id: string }>;
+    return rows.map((r) => r.id);
   }
 
   async claimDueScheduled(tx: Transaction, limit: number): Promise<string[]> {

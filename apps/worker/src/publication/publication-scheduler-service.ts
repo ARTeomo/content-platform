@@ -103,8 +103,10 @@ export class PublicationSchedulerService {
             `[publication.schedule] skipping ${id}: destination ${destinationId} credentials are ${health}`,
           );
           // FAILED is terminal: resetting to SCHEDULED would re-enter the
-          // scan window and risk a loop.
-          await publicationsRepo.markFailed(tx, id);
+          // scan window and risk a loop. The CREDENTIAL_GATE category marks
+          // these rows for the post-credential-fix requeue in the
+          // credential store path (WP-11 J.3).
+          await publicationsRepo.markFailed(tx, id, 'CREDENTIAL_GATE');
           blockedForNotification.push({ publicationId: id, destinationId, reason });
           blocked++;
           continue;

@@ -296,7 +296,7 @@ export class PublicationSchedulerService {
    *     Never enqueued again (the J.3 hook matches CREDENTIAL_GATE
    *     only, so these rows are not picked up there either).
    *  2. Due-retry claim — while still RETRY, under the bound, and past
-   *     the exponential backoff (`min(max, base * 2^(maxAttempt-1))`):
+   *     the exponential backoff (`min(max, base * 2^(max(maxAttempt, 1) - 1))`):
    *     flip to SCHEDULED (J.3-style; NO enqueue here). Scan 1 picks
    *     the row up on a later tick and enqueues with the
    *     attempt-scoped jobId.

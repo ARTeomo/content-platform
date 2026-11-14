@@ -110,7 +110,7 @@ export class ContentPublishService {
           const parent = (await tx.execute(sql`
             UPDATE content_items
             SET status = 'PUBLISHED',
-                published_at = COALESCE(published_at, ${at}),
+                published_at = COALESCE(published_at, ${at.toISOString()}::timestamptz),
                 updated_at = now()
             WHERE id = ${context.contentId}
             RETURNING id

@@ -3,35 +3,50 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-10-14
+**Snapshot date:** 2026-11-14
 **Branch:** `main`
-**HEAD:** `31b423f` — `Merge pull request #2 from
-ARTeomo/fix/destination-fk-restrict`
+**HEAD:** `9130563` — `fix(publication): atomic success claim`
 **Relationship to `main`:** this snapshot IS `main`; local ==
-`origin/main` (CONFIRMED 2026-10-14: `git rev-parse HEAD` ==
+`origin/main` (CONFIRMED 2026-11-14: `git rev-parse HEAD` ==
 `git rev-parse origin/main` ==
-`31b423f47f2dbb34620bddf8c58197ce21256ddd`).
-**Merge log (2026-10-13/14, all merge commits):** PR #1 hardening
-(`c7b8e4f`) → PR #3 WP-4 first half (`67d6130`) → PR #2 WP-1
-(`31b423f`). No open PRs (CONFIRMED 2026-10-14 via `gh pr list`).
+`9130563c84e6943182afba2d0dd6475ea38f40ce`).
+**Merge log (all merge commits):** PR #1 hardening (`c7b8e4f`) →
+PR #3 WP-4 first half (`67d6130`) → PR #2 WP-1 (`31b423f`) → PR #4
+WP-4 second half (`77132bf`, 2026-11-12) → PR #5 WP-11 package 1
+(`918657e`, 2026-11-14). No open PRs (re-verified 2026-11-14 via
+`gh pr list`).
 **Branch protection on `main` (applied and read-back verified
 2026-10-14):** pull requests required with 0 approving reviews;
 required status check `Build, typecheck, test` (strict: false);
 `enforce_admins: false` (administrative emergency bypass preserved);
-force pushes and branch deletion disabled.
-**Working tree:** clean. (CONFIRMED 2026-10-14: `git status --porcelain`
-empty before and after every inspection command.)
+force pushes and branch deletion disabled. NOTE: the 2026-11-14 push
+of the two WP-11 package-2 commits used the administrative bypass
+(owner-authorized); CI run 43613278033 green at `9130563`.
+**Working tree:** clean. (CONFIRMED 2026-11-14: `git status --porcelain`
+empty after the WP-11 package-2 push.)
 **Repository:** https://github.com/ARTeomo/content-platform
 
 ---
 
-## Status at a glance (re-verified 2026-10-14 at `31b423f`; historical blocks dated)
+## Status at a glance (re-verified 2026-11-14 at `9130563`; historical blocks dated)
 
-Everything in this section was re-verified against the checked-out
-files, Git history, configuration, migrations, source, tests, and
-documentation on 2026-10-09. Read-only inspection commands only; the
-only writes anywhere were diagnostic outputs redirected to the system
-temp directory, outside the repository.
+### Gates re-verified at `9130563` (main, 2026-11-14)
+
+| Check                          | Result (measured 2026-11-14 at `9130563`)                                                                                                                                                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Format (`pnpm format:check`)   | **PASS** (exit 0)                                                                                                                                                                                                                                                                     |
+| Typecheck (`pnpm typecheck`)   | **PASS 6/6** projects                                                                                                                                                                                                                                                                 |
+| Build (`pnpm build`)           | **PASS**, all six buildable packages                                                                                                                                                                                                                                                  |
+| Lint (`pnpm lint`)             | **0 errors / 40 warnings / 0 fatals** (one net-new warning vs. the 39-warning baseline is a test-helper return type in the C-D5 tests)                                                                                                                                                |
+| Tests, DB env unset            | **177 passed / 116 skipped**, exit 0 (skip delta +17 vs. the 2026-10-14 baseline: +7 from WP-11 package 1's DB-gated tests, +10 from package 2's)                                                                                                                                     |
+| Tests, `TEST_DATABASE_URL` set | **290 passed / 0 failed / 9 skipped** against the configured Neon `content-platform_test` (the 9 skips are exactly the two Redis-gated suites — BLOCKED locally by the confirmed shared-Upstash isolation finding; CI executes them against an ephemeral `redis:7-alpine` service)    |
+| GitHub Actions                 | run 43613278033 (push of `9130563`) **success**; run 43584070237 (PR #5 merge `918657e`) **success**                                                                                                                                                                                  |
+| Migration journal              | **21 entries** (`0000`–`0020`) on both Neon databases; `0020` (`publications.failure_category`, `notifications.resolved_at` — additive, nullable, no CHECK) applied to `content-platform_test` 2026-11-14 and to `content-platform` during the owner-authorized WP-11 live validation |
+
+Baseline comparison (equivalent configuration): env-unset 177/106 at
+`96b062e` → 177/116 at `9130563` = exactly the 10 package-2 DB tests,
+zero pass regressions; with the test DB configured, all new tests
+execute and pass (290/290 non-blocked).
 
 ### Gates executed at `83a5e9e` (all read-only; exact results)
 
@@ -159,6 +174,141 @@ destination_id` is NOT NULL with an `ON DELETE RESTRICT` FK in the
    errors / 39 warnings / 0 fatals after WP-6 (`31030db`), WP-3
    (`06015c4`), WP-8 (`29ebec8`), WP-8b (`2061be2`). (CP-F-04, CP-F-05,
    CP-F-07 RESOLVED.)
+4. **Evidence database is append-only (binding, policy §4).** The Neon
+   `content-platform` database holds the forensic audit evidence (the
+   7 anomalous publication records — still `PUBLISHED` with
+   `published_at NULL` — plus the WP-11 live-validation chain, which is
+   permanent evidence with a real external post). No `UPDATE`,
+   `DELETE`, `TRUNCATE`, backfill, or cleanup against it without
+   explicit, operation-specific owner authorization. An audit finding
+   is never authorization to repair. Integration tests run only against
+   `content-platform_test` (which TRUNCATEs test tables by design).
+5. **No local infrastructure substitutes (binding, policy §2/§12).**
+   The registered online services are the only infrastructure: Neon
+   PostgreSQL and Upstash Redis. No local PostgreSQL, no local Redis,
+   no `redis-memory-server`, no Docker substitutes, no SQLite. If an
+   online service is unavailable, diagnose and report the exact
+   connection problem — do not silently switch infrastructure.
+
+---
+
+## Milestone: Post-audit remediation — WP-11 publication lifecycle hardening and C-D5 crash recovery (2026-11-14)
+
+A forensic database audit (Phases A/B/C/D + supplemental Phase A,
+executed 2026-11 against the Neon `content-platform` database, strictly
+read-only) established the publication-lifecycle defect register; the
+owner then un-gated WP-11 (decisions #5–#7 below). This milestone
+records the two shipped packages and the Gate 0 version-chain verdict.
+The full forensic report (16 integrity checks, 7-record forensic
+matrix, lifecycle reconstruction, test-coverage assessment) was
+delivered in-session and is intentionally not committed to the
+repository.
+
+### Commits since the 2026-11-12 snapshot
+
+| Commit    | Subject                                                                   |
+| --------- | ------------------------------------------------------------------------- |
+| `918657e` | Merge pull request #5 — WP-11 package 1 (publication lifecycle hardening) |
+| `96b062e` | `fix(publication): implement safe stale in-progress recovery`             |
+| `9130563` | `fix(publication): atomic success claim`                                  |
+
+All three are on `origin/main` (fast-forward push 2026-11-14,
+owner-authorized; CI run 43613278033 green at `9130563`).
+
+### WP-11 package 1 — lifecycle hardening (PR #5, live-validated)
+
+Scope: **J.2** parent `content_items` flips to `PUBLISHED` with
+`published_at` in the same success transaction as the publication
+(first-success rule per owner decision #5; `COALESCE` keeps the
+earliest timestamp across destinations); **J.4** prior open
+`publication_failure` notifications resolve in that transaction
+(`is_read` untouched); **J.3** the scheduler's credential-gate block
+tags `failure_category='CREDENTIAL_GATE'` and the credential-store
+hook requeues those rows inside one transaction (idempotent by
+construction); **migration `0020`** (additive: `publications.
+failure_category`, `notifications.resolved_at`; journal now 21).
+
+Live validation 2026-11-14 (owner-authorized, real Meta Graph call to
+the Content Platform Page): the validation chain (content item
+`8faf3e6e-…`, publication `195e51ff-…`) published externally (post
+`1287488901121523_122120835207489537`); **primary criterion PASS** —
+parent flipped `DRAFT`/NULL → `PUBLISHED` with `published_at`
+populated, exactly equal to `publications.published_at`; one `SUCCESS`
+attempt; the planted failure notification resolved with `is_read`
+untouched; the 7 audit evidence records verified unchanged. Validation
+records remain in `content-platform` as permanent evidence. Known
+operational note: the worker boot's `system.outbox.cleanup` (7-day
+retention) deleted the two historical `DISPATCHED` outbox rows from
+2026-10-15; they are preserved in the validation evidence exports.
+
+### WP-11 package 2 — C-D5 crash recovery (`96b062e` + `9130563`)
+
+Root cause: `findStaleInProgress` had zero callers — a worker dying
+after Meta accepted a post but before persistence left publications
+`IN_PROGRESS` with a `PENDING` attempt forever, and blind retry risked
+duplicate external posts.
+
+`96b062e`: recovery integrated into the publication scheduler's
+`runOnce()` (the existing 30s tick — no new worker). Two-phase
+protocol: plain-read candidate IDs, then per-ID one transaction whose
+atomic conditional `UPDATE … RETURNING` (status + staleness
+predicates re-evaluated at claim time) is the claim. Safe outcome for
+the uncertain external result: `FAILED` + `CRASH_RECOVERY`, latest
+`PENDING` attempt finalized `PROCESSING_TIMEOUT`, exactly one
+`publication_failure` notification in the same transaction, no retry,
+no outbox enqueue, no parent `content_items` write. Staleness reuses
+the existing `PUBLICATION_RECONCILE_STALE_THRESHOLD_SECONDS` (300s) —
+no new timeout.
+
+`9130563`: the late-success race fix. The publish success path had an
+unconditional `markPublished`; a still-alive worker's success could
+blindly overwrite a recovery-claimed row. The success path now takes
+an atomic conditional claim (`claimPublished`): eligible from
+`IN_PROGRESS` or `FAILED + CRASH_RECOVERY` (confirmed external post
+recorded, not discarded; superseded category cleared); refused against
+real failures, credential-gate failures, `RECONCILIATION`, and
+duplicate successes. The attempt ledger records the true external
+outcome either way. Both race orderings have end-to-end regression
+coverage through `ContentPublishService`.
+
+### Gate 0 — content version chain verdict (v1.4 stays CLOSED)
+
+Read-only contract↔code↔data investigation (2026-11-14): the contract
+is **SILENT** — no rule requires a published item to have
+`current_version_id`, no lifecycle text creates `content_versions`
+(§5.13 purpose statement only), and `publication_candidates.version`
+(§5.23, bare `> 0` CHECK) is not claimed to reference
+`content_versions`. Code: `content_versions` is write-dead AND
+read-dead (defined only in `schema/content/content-items.ts:67-88`;
+zero repository/service/test references; no `INSERT` site anywhere).
+The only production `content_items` insert is the phase-19e E2E
+harness script; the publish flow never reads `candidates.version`.
+Data: all 8 items have `current_version_id NULL`, candidates at
+version 1, zero version rows — contract-permitted, unclassifiable as a
+defect. Verdict: NOT PRESCRIBED / MISSING writers; v1.4 remains CLOSED
+pending owner review.
+
+### Database state (2026-11-14)
+
+- Journal **21** (`0000`–`0020`) on both Neon databases.
+- `content-platform`: evidence records + WP-11 validation chain
+  preserved (append-only per do-not-run #4); `0020` applied during the
+  owner-authorized live validation.
+- `content-platform_test`: `0020` applied 2026-11-14 for integration
+  testing; both scaffolding rows exported (SHA-256-hashed evidence in
+  the system temp directory) before any test-DB migration and verified
+  unchanged after the suites ran.
+
+### Policy adopted 2026-11-14 (binding for all future work)
+
+Mandatory online-first / data-preservation policy: use the registered
+Neon/Upstash services (no local substitutes); append-only data by
+default (UPDATE/DELETE/TRUNCATE/DROP need explicit operation-specific
+authorization); every database command inspected and classified
+(local-only / read-only / additive / existing-data-modifying) before
+execution; migrations additive and SQL-reviewed; secrets never
+exposed. The full text is the owner's standing instruction; this
+section is the record of adoption.
 
 ---
 
@@ -244,6 +394,10 @@ except the image tag — produced a byte-for-byte identical FK catalog
 and `JOURNAL_COUNT` 20 on both server versions; the WP-1 test received
 `23503` on 16.15 and passes with `23001` on 18.6. CI now runs
 `postgres:18-alpine`. |
+
+| CP-F-18 | High | RESOLVED 2026-11-14 (WP-11 package 2, `96b062e` + `9130563`; pushed to `origin/main`, CI run 43613278033 green) | C-D5 (forensic audit, Phases C/D): `findStaleInProgress` had zero callers — stale `IN_PROGRESS` publications were never recovered; a worker crash between external acceptance and persistence left the row `IN_PROGRESS` with a `PENDING` attempt indefinitely, and blind retry risked duplicate external posts. Resolved by scheduler-integrated two-phase atomic recovery (`FAILED`/`CRASH_RECOVERY`, `PROCESSING_TIMEOUT` attempt, in-transaction single notification, no retry/outbox/parent writes; staleness reuses the existing 300s reconcile threshold) plus the late-success race fix (`claimPublished` conditional success claim with a `CRASH_RECOVERY` carve-out; both orderings regression-tested end-to-end). 10 DB-gated tests added; evidence in the 2026-11-14 milestone section. |
+| CP-F-19 | Medium | CONFIRMED, OPEN — scoped as WP-11 package 3 | C-D6 (forensic audit, Phases C/D): a publication in `RETRY` is never automatically re-enqueued — no code path schedules `RETRY` rows for another execution. Explicitly excluded from package 2 per owner scope. |
+| CP-F-20 | Medium | CONFIRMED 2026-11-14 (Gate 0 read-only contract↔code↔data investigation), OPEN — owner review; v1.4 CLOSED | Content version chain is contract-silent and code-dead: the contract never requires `content_items.current_version_id` for published items, prescribes no `content_versions` creation lifecycle, and does not claim `publication_candidates.version` references `content_versions`; `content_versions` has zero writers and zero readers outside its own schema definition (`schema/content/content-items.ts:67-88`); `candidates.version` carries only a `> 0` CHECK, no FK, and is never read by the publish flow; the live state (8 items, all `current_version_id NULL`, 0 version rows, candidates version 1) is contract-permitted. Verdict: NOT PRESCRIBED / MISSING writers. v1.4 stays CLOSED pending the owner's build decision. |
 
 ---
 
@@ -385,6 +539,24 @@ passing` (line 9); structure block "44 tables" / "15 repository
    into `main` now, or after the lint chain (WP-6/3/8/7) lands~~ **CLOSED
    2026-10-13** — merged via PR #1 (`c7b8e4f`); followed by PR #3
    (`67d6130`, WP-4 first half) and PR #2 (`31b423f`, WP-1).
+5. **Parent-flip rule (WP-11 Gate 0):** with multiple destinations, the
+   parent `content_items` becomes `PUBLISHED` on the **first**
+   successful destination publication (not all-destinations); the
+   earliest `published_at` wins via `COALESCE`. **CLOSED 2026-11-14** —
+   owner answer; implemented in PR #5 and live-validated.
+6. **WP-11 un-gating and live validation:** packages 1–2 authorized
+   with a real external publication to the Content Platform Page,
+   migration 0020 applied to `content-platform`, and a controlled
+   worker run against the shared Upstash instance (single run,
+   isolation safeguards). **CLOSED 2026-11-14** — executed; primary
+   acceptance criterion PASS; evidence records preserved.
+7. **Shared-Redis test isolation:** `REDIS_URL` and `TEST_REDIS_URL`
+   point to the same Upstash instance/database — a CONFIRMED test
+   isolation limitation. Redis-touching suites do not run locally;
+   CI's ephemeral `redis:7-alpine` service container is their
+   designated executor. **OPEN (infrastructure)** — fix by separating
+   the test Redis endpoint (e.g., a second Upstash database), owner to
+   decide.
 
 ---
 
@@ -393,16 +565,16 @@ passing` (line 9); structure block "44 tables" / "15 repository
 Status values: **PROPOSED** (not started; this document is the spec),
 **GATED** (blocked by a decision or prerequisite).
 
-| WP                                                                     | Addresses                                     | Status                                                              | Dependencies                                 | Outline, acceptance, risk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WP-6                                                                   | CP-F-04                                       | DONE (`31030db`)                                                    | none                                         | Add `packages/database/scripts/tsconfig.json` and `apps/worker/scripts/tsconfig.json` (identical minimal content: `target ES2022`, `module ESNext`, `moduleResolution Bundler`, `allowJs: true`, `checkJs: false`, `strict: true`, `noEmit: true`, `skipLibCheck: true`, `include: ["./**/*.mjs"]`). The project service auto-discovers them; `@types/node` already resolves in both packages (both declare `@types/node ^22`; CONFIRMED present in each package's `node_modules/@types`). No dependency or lockfile change; builds unaffected (no tsconfig references the scripts projects). Add one scoped block to `eslint.config.js` for `files: ['**/*.mjs']` setting `'no-undef': 'off'` with justification (type-aware linting + Node globals resolved by TS; mirrors typescript-eslint's own `eslint-recommended` rationale). **Do not** use `allowDefaultProject` (8-file hard cap, correction #6 above). Acceptance: `pnpm lint` shows 0 fatal parse errors; the scripts became fully lintable instead, surfacing a new diagnostics class (147 errors / 182 warnings) that was resolved as CP-F-16 (`1af1671`); typed rules still load for TS sources; format/typecheck/tests unchanged green. Risk: minimal — config-only, no runtime or dependency changes. Implemented and verified 2026-10-11: fatal parse errors 14 → 0; typed rules load for all sources; format/typecheck/tests unchanged green (see the amended acceptance above). |
-| WP-3                                                                   | CP-F-07 (production item)                     | PROPOSED                                                            | none                                         | One-line-class fix at `apps/worker/src/config.ts:89`: attach `cause` to the re-wrapped error so the root cause is preserved. Classified by source inspection: the other three CP-F-07 findings are test-file findings and belong to WP-8's policy. Acceptance: finding closed with a unit test if the path is observable; lint count for production-code findings reaches 0 or carries an explicit waiver. Risk: minimal. Implemented (`06015c4`; cause-preservation regression tests in `config.test.ts`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| WP-8                                                                   | test lint noise + 3 test findings             | DONE (`29ebec8`; policy approval #3 closed)                         | none technically                             | Scope `require-await` (73 test occurrences) and triage the three test-file findings (`meta-graph-bridge.test.ts:27`, `webhook-process-service-policy.test.ts:196`, `outbox-repository.test.ts:128`) via config for `**/*.test.ts` or targeted fixes. Acceptance: lint green on tests without behavioral test edits; documented justification. Risk: low if config-scoped; medium if any `async` is stripped from throwing mocks. Implemented (`29ebec8`); no `async` was stripped from any mock — the rule was relaxed for test files via config, and the three findings were fixed in code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| WP-8b                                                                  | production lint findings (deferred from WP-8) | DONE                                                                | none                                         | Deferred-to-production half of the WP-8 triage: 12 autofixable findings (6 `no-unnecessary-type-assertion`, 6 `consistent-type-imports`) + 3 unused imports via a scoped `eslint --fix`; 7 `require-await` findings de-asynced with `Promise.resolve()` contracts preserved (four worker `stop()` methods, the `/health` handler, both `NoopMetaRateLimiter` methods); 2 line-scoped waivers (`meta.ts:32` Fastify plugin contract; `mention-extractor.ts:22` `ChangeExtractor` contract). Two commits: `c7f9bc2` (autofixes) + `2061be2` (require-await). Measured after: 0 errors / 39 warnings / 0 fatals; suite 177/98/275; 4 typechecks exit 0.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| WP-7                                                                   | CP-F-05                                       | DONE (`1166a06`; CI run #36 green)                                  | WP-6, WP-3, WP-8 decision                    | Add `pnpm lint` and an explicit `pnpm build` step to CI; delete the obsolete header comment (lines 12-19). Matches the runbook §7 sequence. Acceptance: green CI on a clean tree at the enforced quality gate. Risk: realized as predicted — the gate was enabled only after the baseline reached 0 errors. Implemented (`1166a06`; CI run #36 green with blocking lint + build); concurrency serialization added by WP-4 (`1fced0b`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| WP-1                                                                   | CP-F-02                                       | DONE (`aece925` + `28919ac`; PR #2 `31b423f`)                       | none technically; dev-DB backup before apply | Change `interaction-responses.ts:51` to `onDelete: 'restrict'`; generate migration 0019 via `drizzle-kit generate` (DROP/ADD of the destination FK constraint); contract §5.41 text is already correct — no contract change beyond the unrelated CP-F-12; add a repository/service test asserting that deleting a referenced destination is rejected and that schema/migration parity holds (`drizzle-kit generate` prints "No schema changes"). Apply to the dev database only, after backup, and **never** against a populated production database within the CP-F-01 do-not-run condition. The corrective migration is **executed and verified** (see below). Acceptance: schema, migration 0019, contract §5.41, and tests agree; typecheck/lint/tests green. Risk: low on dev (no app code deletes destinations — CONFIRMED); FK action change would surface only in paths that attempt destination deletion. Executed 2026-10-13/14: dev-DB only (owner waived backup); FK verified `ON DELETE RESTRICT`; regression test expects `23001`; merged via PR #2 (`31b423f`).                                                                                                                                                                                                                                                                                                                                                                       |
-| WP-9                                                                   | CP-F-06/12/13/14/15                           | DONE as executed (`ce7019e` + `b579a1b`, merged in PR #1 `c7b8e4f`) | none; coordinate with WP-7 for ci.yml        | Refresh README (badges, 45 tables, 19 repos, 19 migrations, contract v1.3.1, test counts or a CI-generated badge); refresh this document's stale sections (done by this revision); contract §5.41 vocabulary amendment (CP-F-12); `interaction-responses.ts` cross-ref fix (CP-F-13); TECH spec header (TypeScript 7.0 → 5.9.3) and v1.3.1 compatibility notes; META spec supersession notes; CI-generated lint/test artifacts carrying commit SHAs. Acceptance: docs match HEAD; future reports are revision-bound. Risk: documentation-only. Executed 2026-10-13: README + this document refreshed; ci.yml header cleanup; CP-F-13 cross-ref fixed; drift-register spec items (TECH/META) re-registered in pending item #8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| WP-4                                                                   | CP-F-08                                       | DONE 2026-11-12 (PR #4, merge commit `77132bf`)                     | none                                         | Add Postgres + Redis service containers to a separate CI job so the 99 skipped tests execute on PRs against ephemeral instances only. The 13 TRUNCATE-based test files (CONFIRMED by grep) make shared/production databases absolutely off-limits. Provide `TEST_DATABASE_URL`/`TEST_REDIS_URL` pointed at the services. Acceptance: CI logs show the gated suites executed and passing. Risk: CI-only; test isolation configuration errors could flake — mitigate with service containers scoped to the job. First half executed 2026-10-14: twin-run serialization (group `${{ github.workflow }}-${{ github.head_ref                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |     | github.ref_name }}`, `cancel-in-progress: false`; runs #48/#49 green). Second half executed 2026-11-12 under owner decision #5 (GitHub |
+| WP                                                                     | Addresses                                               | Status                                                                                                               | Dependencies                                 | Outline, acceptance, risk                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WP-6                                                                   | CP-F-04                                                 | DONE (`31030db`)                                                                                                     | none                                         | Add `packages/database/scripts/tsconfig.json` and `apps/worker/scripts/tsconfig.json` (identical minimal content: `target ES2022`, `module ESNext`, `moduleResolution Bundler`, `allowJs: true`, `checkJs: false`, `strict: true`, `noEmit: true`, `skipLibCheck: true`, `include: ["./**/*.mjs"]`). The project service auto-discovers them; `@types/node` already resolves in both packages (both declare `@types/node ^22`; CONFIRMED present in each package's `node_modules/@types`). No dependency or lockfile change; builds unaffected (no tsconfig references the scripts projects). Add one scoped block to `eslint.config.js` for `files: ['**/*.mjs']` setting `'no-undef': 'off'` with justification (type-aware linting + Node globals resolved by TS; mirrors typescript-eslint's own `eslint-recommended` rationale). **Do not** use `allowDefaultProject` (8-file hard cap, correction #6 above). Acceptance: `pnpm lint` shows 0 fatal parse errors; the scripts became fully lintable instead, surfacing a new diagnostics class (147 errors / 182 warnings) that was resolved as CP-F-16 (`1af1671`); typed rules still load for TS sources; format/typecheck/tests unchanged green. Risk: minimal — config-only, no runtime or dependency changes. Implemented and verified 2026-10-11: fatal parse errors 14 → 0; typed rules load for all sources; format/typecheck/tests unchanged green (see the amended acceptance above). |
+| WP-3                                                                   | CP-F-07 (production item)                               | PROPOSED                                                                                                             | none                                         | One-line-class fix at `apps/worker/src/config.ts:89`: attach `cause` to the re-wrapped error so the root cause is preserved. Classified by source inspection: the other three CP-F-07 findings are test-file findings and belong to WP-8's policy. Acceptance: finding closed with a unit test if the path is observable; lint count for production-code findings reaches 0 or carries an explicit waiver. Risk: minimal. Implemented (`06015c4`; cause-preservation regression tests in `config.test.ts`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| WP-8                                                                   | test lint noise + 3 test findings                       | DONE (`29ebec8`; policy approval #3 closed)                                                                          | none technically                             | Scope `require-await` (73 test occurrences) and triage the three test-file findings (`meta-graph-bridge.test.ts:27`, `webhook-process-service-policy.test.ts:196`, `outbox-repository.test.ts:128`) via config for `**/*.test.ts` or targeted fixes. Acceptance: lint green on tests without behavioral test edits; documented justification. Risk: low if config-scoped; medium if any `async` is stripped from throwing mocks. Implemented (`29ebec8`); no `async` was stripped from any mock — the rule was relaxed for test files via config, and the three findings were fixed in code.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| WP-8b                                                                  | production lint findings (deferred from WP-8)           | DONE                                                                                                                 | none                                         | Deferred-to-production half of the WP-8 triage: 12 autofixable findings (6 `no-unnecessary-type-assertion`, 6 `consistent-type-imports`) + 3 unused imports via a scoped `eslint --fix`; 7 `require-await` findings de-asynced with `Promise.resolve()` contracts preserved (four worker `stop()` methods, the `/health` handler, both `NoopMetaRateLimiter` methods); 2 line-scoped waivers (`meta.ts:32` Fastify plugin contract; `mention-extractor.ts:22` `ChangeExtractor` contract). Two commits: `c7f9bc2` (autofixes) + `2061be2` (require-await). Measured after: 0 errors / 39 warnings / 0 fatals; suite 177/98/275; 4 typechecks exit 0.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| WP-7                                                                   | CP-F-05                                                 | DONE (`1166a06`; CI run #36 green)                                                                                   | WP-6, WP-3, WP-8 decision                    | Add `pnpm lint` and an explicit `pnpm build` step to CI; delete the obsolete header comment (lines 12-19). Matches the runbook §7 sequence. Acceptance: green CI on a clean tree at the enforced quality gate. Risk: realized as predicted — the gate was enabled only after the baseline reached 0 errors. Implemented (`1166a06`; CI run #36 green with blocking lint + build); concurrency serialization added by WP-4 (`1fced0b`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| WP-1                                                                   | CP-F-02                                                 | DONE (`aece925` + `28919ac`; PR #2 `31b423f`)                                                                        | none technically; dev-DB backup before apply | Change `interaction-responses.ts:51` to `onDelete: 'restrict'`; generate migration 0019 via `drizzle-kit generate` (DROP/ADD of the destination FK constraint); contract §5.41 text is already correct — no contract change beyond the unrelated CP-F-12; add a repository/service test asserting that deleting a referenced destination is rejected and that schema/migration parity holds (`drizzle-kit generate` prints "No schema changes"). Apply to the dev database only, after backup, and **never** against a populated production database within the CP-F-01 do-not-run condition. The corrective migration is **executed and verified** (see below). Acceptance: schema, migration 0019, contract §5.41, and tests agree; typecheck/lint/tests green. Risk: low on dev (no app code deletes destinations — CONFIRMED); FK action change would surface only in paths that attempt destination deletion. Executed 2026-10-13/14: dev-DB only (owner waived backup); FK verified `ON DELETE RESTRICT`; regression test expects `23001`; merged via PR #2 (`31b423f`).                                                                                                                                                                                                                                                                                                                                                                       |
+| WP-9                                                                   | CP-F-06/12/13/14/15                                     | DONE as executed (`ce7019e` + `b579a1b`, merged in PR #1 `c7b8e4f`)                                                  | none; coordinate with WP-7 for ci.yml        | Refresh README (badges, 45 tables, 19 repos, 19 migrations, contract v1.3.1, test counts or a CI-generated badge); refresh this document's stale sections (done by this revision); contract §5.41 vocabulary amendment (CP-F-12); `interaction-responses.ts` cross-ref fix (CP-F-13); TECH spec header (TypeScript 7.0 → 5.9.3) and v1.3.1 compatibility notes; META spec supersession notes; CI-generated lint/test artifacts carrying commit SHAs. Acceptance: docs match HEAD; future reports are revision-bound. Risk: documentation-only. Executed 2026-10-13: README + this document refreshed; ci.yml header cleanup; CP-F-13 cross-ref fixed; drift-register spec items (TECH/META) re-registered in pending item #8.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| WP-4                                                                   | CP-F-08                                                 | DONE 2026-11-12 (PR #4, merge commit `77132bf`)                                                                      | none                                         | Add Postgres + Redis service containers to a separate CI job so the 99 skipped tests execute on PRs against ephemeral instances only. The 13 TRUNCATE-based test files (CONFIRMED by grep) make shared/production databases absolutely off-limits. Provide `TEST_DATABASE_URL`/`TEST_REDIS_URL` pointed at the services. Acceptance: CI logs show the gated suites executed and passing. Risk: CI-only; test isolation configuration errors could flake — mitigate with service containers scoped to the job. First half executed 2026-10-14: twin-run serialization (group `${{ github.workflow }}-${{ github.head_ref                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |     | github.ref_name }}`, `cancel-in-progress: false`; runs #48/#49 green). Second half executed 2026-11-12 under owner decision #5 (GitHub |
 | Actions service containers; PGlite out of WP-4 scope): per-job         |
 | ephemeral `postgres:18-alpine` + `redis:7-alpine` containers, health   |
 | checks, local-endpoint guard, explicit `db:migrate` step, permanent FK |
@@ -410,10 +582,10 @@ Status values: **PROPOSED** (not started; this document is the spec),
 | against a fresh ephemeral database on every run (runs                  |
 | 43163589435/43163596605, 2026-11-12). PostgreSQL 18 aligns CI with     |
 | Neon 18.6 — the CP-F-17 resolution (see the CP-F-17 row).              |
-| WP-5                                                                   | remaining runtime evidence                    | PROPOSED                                                            | none                                         | Re-run the real E2E verifications (inbound webhook POST → materialization; outbound publication) against the current HEAD, trace the runtime paths only statically verified above (F3/F4/F5 enforcement, outbox/BullMQ idempotency interplay), and re-run the DB-gated suites against an ephemeral database with env vars set. Records results as new evidence; no defect is presumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| WP-2                                                                   | CP-F-01/03/09/10                              | GATED (owner decision #1)                                           | decision #1; then substantial design         | Only after the owner decides "implement §20": advisory-lock single-session runner (`pg_advisory_lock` fixed key, pinned connection per INVARIANT-20/08), immutable pre-migration baseline + §2.8 canonical-JSON SHA-256 digests, Compatibility Bridge with compare-and-abort upserts, executable Hard Gates #1/#2, production index strategy, and a rehearsal on a restored production-shaped copy with digest verification and concurrent-runner tests. If the owner decides "amend contract", WP-2 becomes the contract-amendment work plus a separately-scoped future production protocol. **No production migration until this WP completes and passes rehearsal.** Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| WP-10                                                                  | PR/merge process verification                 | DONE                                                                | none                                         | Execute the WP-1 merge sequence exactly (draft PR, owner review, ready, merge), verifying PR CI, merge commit SHA, and local `main` sync. Executed 2026-10-13/14: PR #1 drafted, ready, merged (`c7b8e4f`); PR #3 merged (`67d6130`); PR #2 merged (`31b423f`); PR CI verified per PR; local `main` synced to `origin/main`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| WP-11                                                                  | (unregistered)                                | NOT REGISTERED                                                      | owner to define scope                        | Referenced in the 2026-10-14 session instructions, but no scope, findings, or acceptance criteria are registered in this document or elsewhere in the repository (verified by search). Owner to define before any work begins.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| WP-5                                                                   | remaining runtime evidence                              | PROPOSED                                                                                                             | none                                         | Re-run the real E2E verifications (inbound webhook POST → materialization; outbound publication) against the current HEAD, trace the runtime paths only statically verified above (F3/F4/F5 enforcement, outbox/BullMQ idempotency interplay), and re-run the DB-gated suites against an ephemeral database with env vars set. Records results as new evidence; no defect is presumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| WP-2                                                                   | CP-F-01/03/09/10                                        | GATED (owner decision #1)                                                                                            | decision #1; then substantial design         | Only after the owner decides "implement §20": advisory-lock single-session runner (`pg_advisory_lock` fixed key, pinned connection per INVARIANT-20/08), immutable pre-migration baseline + §2.8 canonical-JSON SHA-256 digests, Compatibility Bridge with compare-and-abort upserts, executable Hard Gates #1/#2, production index strategy, and a rehearsal on a restored production-shaped copy with digest verification and concurrent-runner tests. If the owner decides "amend contract", WP-2 becomes the contract-amendment work plus a separately-scoped future production protocol. **No production migration until this WP completes and passes rehearsal.** Unimplemented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| WP-10                                                                  | PR/merge process verification                           | DONE                                                                                                                 | none                                         | Execute the WP-1 merge sequence exactly (draft PR, owner review, ready, merge), verifying PR CI, merge commit SHA, and local `main` sync. Executed 2026-10-13/14: PR #1 drafted, ready, merged (`c7b8e4f`); PR #3 merged (`67d6130`); PR #2 merged (`31b423f`); PR CI verified per PR; local `main` synced to `origin/main`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| WP-11                                                                  | forensic audit findings C-D5/C-D6 + lifecycle hardening | PACKAGES 1–2 DONE 2026-11-14 (PR #5 `918657e`; `96b062e` + `9130563` pushed, CI green); package 3 PROPOSED (CP-F-19) | owner decisions #5–#7 (2026-11-14)           | Scope registered by the forensic audit and owner decisions #5–#7. **Package 1** (PR #5): J.2 parent flip + J.4 notification resolution in the success transaction (first-success rule), J.3 credential-gate `failure_category` + requeue hook, migration 0020; live-validated against the real Page 2026-11-14 (primary criterion PASS). **Package 2** (C-D5): stale-`IN_PROGRESS` crash recovery via two-phase atomic claim + late-success race fix; 16 DB-gated tests; details in the 2026-11-14 milestone section. **Package 3 (PROPOSED)**: C-D6 RETRY route — auto-requeue `RETRY` publications with bounded attempts and idempotency safeguards (CP-F-19), preserving package-2 recovery semantics (no blind retries of uncertain outcomes).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ### Release gates (summary)
 
@@ -1401,9 +1573,12 @@ without them, the suites silently skip (see the skipIf trap below).
 
 - **45 tables** implementing DB v1.3.1. (45 `pgTable(` declarations
   across 44 schema files; one file declares two tables.)
-- **20 migrations** (`0000` – `0019`), applied to Neon PostgreSQL;
+- **21 migrations** (`0000` – `0020`), applied to Neon PostgreSQL;
   journal at `packages/database/migrations/meta/_journal.json`
   (the migration directory is `packages/database/migrations/`).
+  `0020` (WP-11 package 1, 2026-11-14) is additive only: `publications.
+failure_category` (nullable text, no CHECK) and `notifications.
+resolved_at` (nullable timestamptz).
 - `pgcrypto` extension registered in `0000`, never re-declared.
 - `webhook_endpoints` created by `0015`.
 - `webhook_subscriptions.endpoint_id` NOT NULL after `0017`.
@@ -2424,16 +2599,29 @@ were limited to `HANDOFF.md`,
 verification for this revision was executed at HEAD `77132bf` on branch
 `main`; no code, schema, migration, or test changes.
 
-**Required-section verification (executed at completion of this
-note, 2026-11-12):**
+A further revision on 2026-11-14 (WP-11 packages 1–2 closure and the
+forensic-audit milestone) updated the header snapshot and gate tables
+(measured at HEAD `9130563`), added do-not-run conditions #4
+(evidence-database append-only) and #5 (no local infrastructure
+substitutes), added the "Post-audit remediation" milestone section,
+registered findings CP-F-18 (C-D5, RESOLVED), CP-F-19 (C-D6, OPEN →
+WP-11 package 3) and CP-F-20 (content version chain, OPEN; v1.4
+CLOSED), updated the WP-11 roadmap row and owner decisions #5–#7, and
+recorded the migration-journal growth to 21 (`0020`). Writes were
+limited to `HANDOFF.md`. Read-only verification was executed at HEAD
+`9130563` on branch `main` (local == `origin/main`, CI run 43613278033
+green); no code, schema, migration, or test changes in this revision.
+This update is uncommitted pending owner direction.
 
-- Findings register CP-F-01 through CP-F-17 — all 17 present, each
-  with severity, status, and file/line evidence.
+**Required-section verification (executed at completion of this
+note, 2026-11-14):**
+
+- Findings register CP-F-01 through CP-F-20 — all 20 present, each
+  with severity, status, and evidence (CP-F-18/19/20 added by the
+  2026-11-14 revision).
 - Work packages WP-1 through WP-11 — all 11 numbered packages present
-  in the dependency-aware roadmap table (12 rows including WP-8b;
-  WP-10 and WP-11 added by the 2026-10-14 reconciliation; WP-11 is
-  explicitly marked unregistered; WP-4 marked DONE (PR #4 `77132bf`)
-  by the 2026-11-12 revision).
+  in the dependency-aware roadmap table (WP-11 re-registered as
+  packages 1–2 DONE, package 3 PROPOSED, by the 2026-11-14 revision).
 - Architectural invariants — all 30 present, numbered 1-30; the Path A
   enforcement caveat after invariant 30 re-verified 2026-10-14 against
   contract INVARIANT-05/08/14/19/20/22.
@@ -2441,10 +2629,10 @@ note, 2026-11-12):**
   preceding this note.
 - Document integrity note — this section.
 
-**Document metrics:** 2450 lines, 176193 bytes (measured
-2026-11-12, after final write of this note).
+**Document metrics:** 2638 lines, 192064 bytes (measured
+2026-11-14, after final write and Prettier formatting of this note).
 
 **Consistency binding.** If any count, status, or line reference in
 this document is found to disagree with the repository at HEAD
-`77132bf`, the repository evidence prevails and this document must be
+`9130563`, the repository evidence prevails and this document must be
 regenerated, not patched piecemeal.

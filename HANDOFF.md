@@ -3,13 +3,18 @@
 This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
-**Snapshot date:** 2026-11-14
-**Branch:** `main`
-**HEAD:** `b2e24e8` — `chore(publication): clarify retry backoff formula`
-**Relationship to `main`:** this snapshot IS `main`; local ==
-`origin/main` (CONFIRMED 2026-11-14: `git rev-parse HEAD` ==
-`git rev-parse origin/main` ==
-`b2e24e8e5d4992eb3e1d4dcc5f0fa566ee3ef4fe`).
+**Snapshot date:** 2026-11-15
+**Branch:** `feat/v14-package1-contract-amendment` (docs-only v1.4/1 amendment; at the
+pre-finalization baseline, `main` was at `727e6e4`)
+**HEAD (pre-finalization baseline):** `727e6e4` — `docs(handoff): close WP-11 package 3 and correct test baselines` (branch HEAD after the finalization commit: `dffb412`; this corrective commit builds on it)
+**Relationship to `main`:** the snapshot base IS `main`: `727e6e4` == `origin/main`
+(RE-CONFIRMED 2026-11-15: `git rev-parse HEAD` == `git rev-parse origin/main` ==
+`727e6e450fa8c78cdf419a2b39ea9b4def29d56d`). This HANDOFF update is part of the
+owner-authorized v1.4/1 finalization commit on the feature branch above; the merge of
+that branch into main is owner-authorized, conditional on all gates passing. These
+changes were prepared as uncommitted working-tree modifications and are recorded by
+the finalization commit (`dffb412`, 2026-11-15). At the
+pre-finalization baseline, main (origin/main) was at `727e6e4`.
 **Merge log (all merge commits):** PR #1 hardening (`c7b8e4f`) →
 PR #3 WP-4 first half (`67d6130`) → PR #2 WP-1 (`31b423f`) → PR #4
 WP-4 second half (`77132bf`, 2026-11-12) → PR #5 WP-11 package 1
@@ -25,7 +30,11 @@ of the WP-11 package-2 commits, the WP-11 package-3 commit (`cae533a`,
 CI run 43629522629 SUCCESS), and the comment-only chore commit
 (`b2e24e8`, CI run 43630300755 SUCCESS) all used the owner-authorized
 administrative bypass.
-**Working tree:** clean. (CONFIRMED 2026-11-14.)
+**Working tree:** at finalization, the working tree carried exactly the
+complete v1.4/1 documentation set (HANDOFF.md,
+docs/architecture/DATABASE_SCHEMA_CONTRACT.md,
+docs/planning/v1-4-development-plan-2026-11-15.md); it became clean
+with the finalization commit `dffb412` (2026-11-15).
 **Repository:** https://github.com/ARTeomo/content-platform
 
 ---
@@ -322,7 +331,7 @@ it resolved the test-count reconciliation (15 added, 0 removed; the "21
 new tests" figure in the implementation report was a reporting error) and
 exposed the 2026-11-14 gate-table errors corrected in this revision.
 
-### Gate 0 — content version chain verdict (v1.4 stays CLOSED)
+### Gate 0 — content version chain verdict (2026-11-14; v1.4 status superseded 2026-11-15 by owner scope approval — implementation and acceptance pending)
 
 Read-only contract↔code↔data investigation (2026-11-14): the contract
 is **SILENT** — no rule requires a published item to have
@@ -336,8 +345,10 @@ The only production `content_items` insert is the phase-19e E2E
 harness script; the publish flow never reads `candidates.version`.
 Data: all 8 items have `current_version_id NULL`, candidates at
 version 1, zero version rows — contract-permitted, unclassifiable as a
-defect. Verdict: NOT PRESCRIBED / MISSING writers; v1.4 remains CLOSED
-pending owner review.
+defect. Verdict: NOT PRESCRIBED / MISSING writers. (The v1.4 status
+clause recorded here with this verdict on 2026-11-14 is superseded by the
+owner decision of 2026-11-15 — see the CP-F-20 clarification below the
+findings table.)
 
 ### Database state (2026-11-14)
 
@@ -448,7 +459,32 @@ and `JOURNAL_COUNT` 20 on both server versions; the WP-1 test received
 
 | CP-F-18 | High | RESOLVED 2026-11-14 (WP-11 package 2, `96b062e` + `9130563`; pushed to `origin/main`, CI run 43613278033 green) | C-D5 (forensic audit, Phases C/D): `findStaleInProgress` had zero callers — stale `IN_PROGRESS` publications were never recovered; a worker crash between external acceptance and persistence left the row `IN_PROGRESS` with a `PENDING` attempt indefinitely, and blind retry risked duplicate external posts. Resolved by scheduler-integrated two-phase atomic recovery (`FAILED`/`CRASH_RECOVERY`, `PROCESSING_TIMEOUT` attempt, in-transaction single notification, no retry/outbox/parent writes; staleness reuses the existing 300s reconcile threshold) plus the late-success race fix (`claimPublished` conditional success claim with a `CRASH_RECOVERY` carve-out; both orderings regression-tested end-to-end). 10 DB-gated tests added; evidence in the 2026-11-14 milestone section. |
 | CP-F-19 | Medium | RESOLVED 2026-11-14 (WP-11 package 3, `cae533a`; CI run 43629522629 green; comment-formula fix `b2e24e8`, CI run 43630300755) | C-D6 (forensic audit, Phases C/D): a publication in `RETRY` was never automatically re-enqueued — no code path scheduled `RETRY` rows for another execution. RESOLVED by scheduler-integrated `scanDueRetries`: attempt-scoped outbox jobIds (`content.publish:{id}:{nextAttempt}`); bounded attempts (default 5, `PUBLICATION_RETRY_MAX_ATTEMPTS`); exponential backoff 60s base → 3600s cap measured from `updated_at`; terminal `FAILED` + `RETRY_EXHAUSTED` with exactly one in-transaction notification; `CRASH_RECOVERY` semantics preserved (J.3 hook still CREDENTIAL_GATE-only). +15 tests (9 scheduler, 3 repository, 3 config); full suite 313 passed / 0 failed / 0 skipped / 0 todo (35 files). |
-| CP-F-20 | Medium | CONFIRMED 2026-11-14 (Gate 0 read-only contract↔code↔data investigation), OPEN — owner review; v1.4 CLOSED | Content version chain is contract-silent and code-dead: the contract never requires `content_items.current_version_id` for published items, prescribes no `content_versions` creation lifecycle, and does not claim `publication_candidates.version` references `content_versions`; `content_versions` has zero writers and zero readers outside its own schema definition (`schema/content/content-items.ts:67-88`); `candidates.version` carries only a `> 0` CHECK, no FK, and is never read by the publish flow; the live state (8 items, all `current_version_id NULL`, 0 version rows, candidates version 1) is contract-permitted. Verdict: NOT PRESCRIBED / MISSING writers. v1.4 stays CLOSED pending the owner's build decision. |
+| CP-F-20 | Medium | CONFIRMED 2026-11-14 (Gate 0 read-only contract↔code↔data investigation), OPEN — v1.4 scope APPROVED 2026-11-15 (discovery + SourceItem production in scope per owner decision; contract D-020 DECIDED, §16.4–§16.5; plan `docs/planning/v1-4-development-plan-2026-11-15.md`); implementation and acceptance evidence pending | Content version chain was contract-silent and is code-dead: as confirmed by the Gate 0 investigation on 2026-11-14, the then-approved v1.3.1 contract did not prescribe the content version chain — it did not require `content_items.current_version_id` for published items, prescribed no `content_versions` creation lifecycle, and did not claim `publication_candidates.version` references `content_versions`; `content_versions` has zero writers and zero readers outside its own schema definition (`schema/content/content-items.ts:67-88`); `candidates.version` carries only a `> 0` CHECK, no FK, and is never read by the publish flow; the live state (8 items, all `current_version_id NULL`, 0 version rows, candidates version 1) is contract-permitted. Verdict: NOT PRESCRIBED / MISSING writers. (The pre-decision v1.4 status clause is superseded 2026-11-15 — see the status column of this row.) |
+
+CP-F-20 clarification (2026-11-15, v1.4/1): Gate 0 proved the current
+implementation is MISSING the required version-writing and
+canonical-content behavior — contract-silent rules, zero
+`content_versions` writers. The owner's subsequent decision approved the
+v1.4 development objective: build the missing ingestion → normalization →
+canonical-content → immutable-version processing chain by defining the
+missing lifecycle rules and architectural invariants. These two statements
+do not contradict each other: the first describes the current
+implementation state, the second the approved future development
+objective. The pre-decision "v1.4 CLOSED" wording (2026-11-14 Gate 0
+heading and status note) is superseded by the owner decision; CP-F-20
+itself remains OPEN until the v1.4 implementation and acceptance work
+(including the upstream discovery/SourceItem production flow, package 5,
+and migration `0021`) completes. The 2026-11-15 read-only SourceItem-origin
+investigation additionally found NO implemented discovery-side
+`source_items` writer (zero code writers; zero rows across the entire
+upstream chain on both Neon databases). Owner decision 2026-11-15
+(contract D-020, §16.4–§16.5; v1.4 package plan
+`docs/planning/v1-4-development-plan-2026-11-15.md`): discovery and
+SourceItem production are IN the
+v1.4 implementation scope — v1.4 must implement the upstream production
+flow, and the normalization process must not depend on a SourceItem
+population mechanism that does not exist in the current codebase. The
+upstream flow remains unimplemented at this time.
 
 ---
 
@@ -2154,6 +2190,14 @@ can proceed in parallel or later.
 6. WP-11 definition: referenced in the 2026-10-14 session
    instructions, but no scope is registered in this document or
    elsewhere. Owner to define.
+7. **D-020 / v1.4 scope — DECIDED 2026-11-15** — the v1.4 development
+   objective is approved and INCLUDES discovery and SourceItem
+   production in the implementation scope (owner decision; contract
+   D-020 DECIDED, §16.4–§16.5; package plan
+   `docs/planning/v1-4-development-plan-2026-11-15.md`, sequence
+   v1.4/1–v1.4/5 with dependencies per the plan). The scope decision
+   does NOT close CP-F-20: the finding remains OPEN until the v1.4
+   implementation and acceptance evidence exists.
 
 ### Primary: lint chain (WP-6 → WP-3 → WP-8 → WP-8b → WP-7) — ALL DONE
 
@@ -2660,8 +2704,9 @@ forensic-audit milestone) updated the header snapshot and gate tables
 (evidence-database append-only) and #5 (no local infrastructure
 substitutes), added the "Post-audit remediation" milestone section,
 registered findings CP-F-18 (C-D5, RESOLVED), CP-F-19 (C-D6, OPEN →
-WP-11 package 3) and CP-F-20 (content version chain, OPEN; v1.4
-CLOSED), updated the WP-11 roadmap row and owner decisions #5–#7, and
+WP-11 package 3) and CP-F-20 (content version chain, OPEN; v1.4 status
+superseded 2026-11-15 — see the CP-F-20 row and decision log #7),
+updated the WP-11 roadmap row and owner decisions #5–#7, and
 recorded the migration-journal growth to 21 (`0020`). Writes were
 limited to `HANDOFF.md`. Read-only verification was executed at HEAD
 `9130563` on branch `main` (local == `origin/main`, CI run 43613278033
@@ -2681,8 +2726,58 @@ Read-only verification was executed at HEAD `b2e24e8` on branch `main`
 (local == `origin/main`, CI runs 43629522629 and 43630300755 green);
 no code, schema, migration, or test changes in this revision.
 
+A further revision on 2026-11-15 (v1.4/1 commit preparation) refreshed
+the header snapshot from the stale 2026-11-14 / `b2e24e8` block to the
+actual base `727e6e4` (== `origin/main`); the v1.4/1 documentation set
+lands on `feat/v14-package1-contract-amendment`: contract v1.4.0 draft
+(§16.1–§16.5, §23.5 INVARIANT-23..26, D-020 DECIDED — discovery and
+SourceItem production in v1.4 scope), the new development plan (five
+packages, Q1–Q11), and the HANDOFF CP-F-20 clarification (status
+superseded; historical framing; CP-F-20 remains OPEN — implementation
+and acceptance evidence pending). Package v1.4/1 is not closed by this
+entry. Writes were limited to `HANDOFF.md` (header state block and this
+revision log). Read-only verification was executed at HEAD `727e6e4` on
+branch `feat/v14-package1-contract-amendment` (local == `origin/main`);
+no code, schema, migration, or test changes in this revision. This
+update is uncommitted pending the owner's commit decision (superseded
+2026-11-15 — see the finalization entry below).
+
+A further revision on 2026-11-15 (v1.4/1 documentation finalization,
+owner-authorized) applied the RawResource two-path clarification to the
+contract (acquisition-backed path vs inline path; the D-020 decision
+text and chain preserved byte-for-byte), added the plan's D4.3
+safeguard sentence (mandatory version-chain obligations cannot be
+deferred or weakened), converted the contract and the plan from DRAFT
+to FINAL per the owner's 2026-11-15 approval (documentation baseline
+only — implementation conformance is not claimed), closed plan package
+/1 by owner approval, and reconciled this header and the consistency
+binding. Validation (formatting, content checks, change control) was
+executed at HEAD `727e6e4` on branch
+`feat/v14-package1-contract-amendment` (local == `origin/main`). Q11
+remains OPEN. CP-F-20 remains OPEN. No implementation completion is
+claimed. Writes were limited to `HANDOFF.md`,
+`docs/architecture/DATABASE_SCHEMA_CONTRACT.md`, and
+`docs/planning/v1-4-development-plan-2026-11-15.md`; no code, schema,
+migration, or test changes. This update is carried by the
+owner-authorized finalization commit; the commit SHA is reported in
+the finalization report.
+
+A further revision on 2026-11-15 (corrective commit, owner-authorized)
+reconciled three wording defects found in owner review of the
+finalization: (a) the plan's status-discipline line was brought into
+agreement with the v1.4/1 CLOSED status row, (b) two stale `draft`
+references to the contract in the plan were updated to the FINAL
+v1.4.0 status (owner-approved 2026-11-15), and (c) this header's
+Git-state labeling was rewritten to historical-baseline form
+(pre-finalization baseline `727e6e4`; branch HEAD after the
+finalization commit `dffb412`). Writes were limited to `HANDOFF.md`
+and `docs/planning/v1-4-development-plan-2026-11-15.md`; the contract
+file is untouched by this correction. Q11 remains OPEN. CP-F-20
+remains OPEN. This corrective commit builds on the finalization commit
+`dffb412` without amending it.
+
 **Required-section verification (executed at completion of this
-note, 2026-11-14, on the final file):**
+note, 2026-11-15, on the final file):**
 
 - Findings register CP-F-01 through CP-F-20 — all 20 present, each
   with severity, status, and evidence (CP-F-18/19/20 added by the
@@ -2697,10 +2792,18 @@ note, 2026-11-14, on the final file):**
   preceding this note.
 - Document integrity note — this section.
 
-**Document metrics:** 2706 lines, 198352 bytes (measured
-2026-11-14, on the final file after Prettier formatting of this note).
+**Document metrics:** 2809 lines, 205613 bytes (measured
+2026-11-15, on the final file after Prettier formatting of this note).
 
-**Consistency binding.** If any count, status, or line reference in
-this document is found to disagree with the repository at HEAD
-`9130563`, the repository evidence prevails and this document must be
-regenerated, not patched piecemeal.
+**Consistency binding.** The verified pre-finalization baseline of
+this document is HEAD == `origin/main` ==
+`727e6e450fa8c78cdf419a2b39ea9b4def29d56d` (historical baseline,
+re-verified 2026-11-15 before the finalization edits; the dated gate
+tables below were measured earlier at `b2e24e8` and remain historical
+blocks). If any count, status, or line reference in this document is
+found to disagree with the repository evidence, the repository evidence
+prevails and this document must be regenerated, not patched piecemeal.
+The v1.4/1 finalization commit is created on top of this baseline in
+the same 2026-11-15 round; a document cannot contain its own commit
+hash, so that commit's SHA is reported in the finalization report
+rather than here.

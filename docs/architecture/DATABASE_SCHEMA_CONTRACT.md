@@ -1,12 +1,12 @@
 # Content Platform — Database Schema Contract
 
-**Version:** 1.3.1
-**Status:** Production-Ready DB v1.3.1 Persistence Contract — Zero-Downtime Schema Migration with Bounded Write Fence
-**Normative:** Yes — implementation baseline
-**Generated:** 2026-10-05
+**Version:** 1.4.0
+**Status:** **FINAL — approved by the owner 2026-11-15. This document is the approved normative documentation baseline and supersedes DB v1.3.1 (see §26). It records the approved documentation baseline; it does not by itself certify implementation conformance or completeness.**
+**Normative:** Yes — owner-approved 2026-11-15 (normative documentation baseline; implementation conformance is evidenced separately, not implied by this approval)
+**Generated:** 2026-11-15
 **Scope:** PostgreSQL persistence model for the Content Platform. DB v1 distinguishes the 15-table core logical model from supporting platform persistence tables required by the established technical design.
 **Migration set:** starts at `0015` (Path A). Path B is a consolidated greenfield baseline. See §20.
-**Consolidated baseline:** This document is a self-contained, standalone persistence contract. It supersedes all prior versions of `DATABASE_SCHEMA_CONTRACT.md` (v1.0 through v1.3) and does not require the reader to consult any earlier revision for table definitions, invariants, or deferred decisions.
+**Consolidated baseline:** This document is a self-contained, standalone persistence contract. Owner-accepted 2026-11-15: it supersedes all prior versions of `DATABASE_SCHEMA_CONTRACT.md` (v1.0 through v1.3.1) and does not require the reader to consult any earlier revision for table definitions, invariants, or deferred decisions.
 
 ---
 
@@ -45,6 +45,18 @@
 
 The v1.3.1 baseline is self-contained and does not require reference to any prior version.
 
+**Revision 1.4.0** — Canonical content and version chain amendment (2026-11-15, owner-approved). This revision does NOT change the physical schema (45 tables, unchanged; no new migration; the migration journal stays at 21 entries). It supplements the previously descriptive v1.0 definitions concerning `source_items`, `content_items`, and `content_versions` with explicit normative v1.4 lifecycle and architectural requirements:
+
+- the extended canonical processing chain (§16), now terminating at `ContentVersion`;
+- four NEW normative invariants (§23.5): Sole Version Writer (INVARIANT-23 / v1.4 I-1), Atomic Version Creation and Current-Version Update (INVARIANT-24 / v1.4 I-2), PUBLISHED Requires a Valid Current Version (INVARIANT-25 / v1.4 I-3), and Independent Editorial Counter (INVARIANT-26 / v1.4 I-4);
+- grandfathering of the eight existing `content_items` rows whose `current_version_id` is NULL (§16.2);
+- a new normative publication-binding requirement, effective from v1.4.0, with technical implementation deferred to a later v1.4 package (§16.3);
+- a normative SourceItem production responsibility and SourceItem lifecycle rules (§16.4, §16.5, D-020): per the binding owner decision of 2026-11-15, discovery and SourceItem production are IN the v1.4 implementation scope, and the upstream production flow (`Source → SourceEndpoint → DiscoveryObservation → DiscoveredResource → RawResource → SourceItem`) is an explicit prerequisite of the canonical-content lifecycle. Unresolved design questions (pipeline idempotency keys, re-processing semantics, the ContentItem deduplication algorithm, extraction formats, upstream retry policies, upstream transaction boundaries, inline-path traceability sufficiency, re-normalization triggers) are recorded, not silently decided; the implementation allocation is defined in the v1.4 development plan (`docs/planning/v1-4-development-plan-2026-11-15.md`).
+
+The `RawResource` step applies to the acquisition-backed path; on the inline path the `SourceItem` is extracted directly from the `DiscoveredResource` and no `RawResource` exists (§5.9, §5.10, §16.4, §16.5).
+
+The v1.4.0 requirements are NEW normative obligations. They are NOT implied by the v1.0 data model, and they do NOT assert that any v1.4 implementation already exists. The physical implementation (the upstream discovery/acquisition/SourceItem production flow, repositories, the dedicated normalization worker/service, migration `0021`, and database constraints) is delivered by later v1.4 packages per the v1.4 development plan (`docs/planning/v1-4-development-plan-2026-11-15.md`).
+
 ### Supersession of higher-level documents
 
 This contract is authoritative for the physical persistence model. The following statements in higher-level documents are superseded by this revision:
@@ -59,7 +71,7 @@ The referenced higher-level documents must be revised to §5.34, §5.39, §5.35,
 
 ## Contract Scope and Interpretation
 
-This document is a **normative contract**, not a work-in-progress specification. It defines the required target state of the Content Platform persistence model at DB v1.3.1. Every normative statement in this document is binding.
+This document is a **normative contract**, not a work-in-progress specification. It defines the required target state of the Content Platform persistence model at DB v1.4.0. Every normative statement in this document is binding.
 
 ### Contract status versus implementation status
 
@@ -68,8 +80,8 @@ The `Status` field above describes **this document** as a specification. It does
 The relationship is strictly:
 
 ```text
-DATABASE_SCHEMA_CONTRACT v1.3.1
-        = production-ready TARGET CONTRACT
+DATABASE_SCHEMA_CONTRACT v1.4.0
+        = APPROVED NORMATIVE TARGET CONTRACT (FINAL — owner-approved 2026-11-15)
 
 Current repository
         = a state that MAY or MAY NOT conform
@@ -104,35 +116,40 @@ The following interpretation rules are normative:
 
 Because this document is normative and will be the basis of downstream refactoring, the following self-consistency audit checklist is part of the contract. Every checklist item MUST hold true in this document's text.
 
-| #   | Consistency check                                                                                                                         | Where satisfied                       |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| 1   | Every `[INVARIANT-xx]` references at least one concrete § or table definition                                                             | §2.2, §5, §20                         |
-| 2   | Every table in §3.2 has a §5.x subsection                                                                                                 | §5.1–§5.45                            |
-| 3   | Every §5.x table matches the corresponding schema description in §3 and §19                                                               | §3.2, §5, §19                         |
-| 4   | Every index in §8 has a corresponding reference in §5.x                                                                                   | §5, §8                                |
-| 5   | Every foreign key in §7 is declared with the same nullability as in §5.x                                                                  | §5, §7                                |
-| 6   | Every referential action in §7 is consistent with §4.5                                                                                    | §4.5, §7                              |
-| 7   | Every `ON DELETE SET NULL` in §7 is paired with a nullable column                                                                         | §4.5, §7.2                            |
-| 8   | Every `NOT NULL` FK uses `RESTRICT` or `CASCADE`                                                                                          | §4.5, §7.1, §7.3                      |
-| 9   | Every migration step in §20 is compatible with INVARIANT-14 and §2.6                                                                      | §2.6, §20                             |
-| 10  | Every Path A transformation in §20.2 maps to an Allowed row in §2.6                                                                       | §2.6, §20.2                           |
-| 11  | Every Path A rollback claim is supported by a state that exists in some earlier phase or by §20.2.8                                       | §20.2.2, §20.2.5, §20.2.8             |
-| 12  | No sentence in this document contradicts an `[INVARIANT-xx]`                                                                              | whole document                        |
-| 13  | No sentence in this document admits two incompatible readings                                                                             | whole document                        |
-| 14  | No sentence in this document refers to "current implementation" as evidence of conformance                                                | whole document                        |
-| 15  | v1.2 / Phase 19 business data has no implicit overwrite path                                                                              | §2.2 INVARIANT-14, §2.6, §20.2.3      |
-| 16  | Every `0016` failure mode has an explicitly named resulting state                                                                         | §20.2.8                               |
-| 17  | The single-session advisory-lock requirement is explicit                                                                                  | INVARIANT-20, §20.2.3                 |
-| 18  | The immutable pre-migration preservation baseline is captured before any `0016` data modification and is never recomputed during recovery | INVARIANT-22, §20.2.3 step 1a, §2.8.9 |
-| 19  | The `0016` transaction/session state machine is explicitly defined                                                                        | §20.2.9                               |
-| 20  | The "zero-downtime" terminology is consistently qualified throughout the document                                                         | §20.0, §26, Interpretation rule 14    |
-| 21  | The `occurred_at` monotonicity wording is precise and unambiguous                                                                         | §5.39, D-018                          |
+| #   | Consistency check                                                                                                                                                                         | Where satisfied                       |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| 1   | Every `[INVARIANT-xx]` references at least one concrete § or table definition                                                                                                             | §2.2, §5, §20                         |
+| 2   | Every table in §3.2 has a §5.x subsection                                                                                                                                                 | §5.1–§5.45                            |
+| 3   | Every §5.x table matches the corresponding schema description in §3 and §19                                                                                                               | §3.2, §5, §19                         |
+| 4   | Every index in §8 has a corresponding reference in §5.x                                                                                                                                   | §5, §8                                |
+| 5   | Every foreign key in §7 is declared with the same nullability as in §5.x                                                                                                                  | §5, §7                                |
+| 6   | Every referential action in §7 is consistent with §4.5                                                                                                                                    | §4.5, §7                              |
+| 7   | Every `ON DELETE SET NULL` in §7 is paired with a nullable column                                                                                                                         | §4.5, §7.2                            |
+| 8   | Every `NOT NULL` FK uses `RESTRICT` or `CASCADE`                                                                                                                                          | §4.5, §7.1, §7.3                      |
+| 9   | Every migration step in §20 is compatible with INVARIANT-14 and §2.6                                                                                                                      | §2.6, §20                             |
+| 10  | Every Path A transformation in §20.2 maps to an Allowed row in §2.6                                                                                                                       | §2.6, §20.2                           |
+| 11  | Every Path A rollback claim is supported by a state that exists in some earlier phase or by §20.2.8                                                                                       | §20.2.2, §20.2.5, §20.2.8             |
+| 12  | No sentence in this document contradicts an `[INVARIANT-xx]`                                                                                                                              | whole document                        |
+| 13  | No sentence in this document admits two incompatible readings                                                                                                                             | whole document                        |
+| 14  | No sentence in this document refers to "current implementation" as evidence of conformance                                                                                                | whole document                        |
+| 15  | v1.2 / Phase 19 business data has no implicit overwrite path                                                                                                                              | §2.2 INVARIANT-14, §2.6, §20.2.3      |
+| 16  | Every `0016` failure mode has an explicitly named resulting state                                                                                                                         | §20.2.8                               |
+| 17  | The single-session advisory-lock requirement is explicit                                                                                                                                  | INVARIANT-20, §20.2.3                 |
+| 18  | The immutable pre-migration preservation baseline is captured before any `0016` data modification and is never recomputed during recovery                                                 | INVARIANT-22, §20.2.3 step 1a, §2.8.9 |
+| 19  | The `0016` transaction/session state machine is explicitly defined                                                                                                                        | §20.2.9                               |
+| 20  | The "zero-downtime" terminology is consistently qualified throughout the document                                                                                                         | §20.0, §26, Interpretation rule 14    |
+| 21  | The `occurred_at` monotonicity wording is precise and unambiguous                                                                                                                         | §5.39, D-018                          |
+| 22  | Every `content_versions` creation and every `content_items.current_version_id` update is owned by the single dedicated normalization worker/service                                       | §23.5                                 |
+| 23  | A SourceItem may only be created with proven upstream evidence                                                                                                                            | §16.5                                 |
+| 24  | Provenance target entities are temporally and semantically consistent with the §5.8 polymorphic target model, and no normalization phase assignment is claimed beyond the §5.8 vocabulary | §16.4, §16.5                          |
+| 25  | Publication binds to a concrete immutable ContentVersion                                                                                                                                  | §16.3                                 |
+| 26  | Grandfathering does not permit a new transition into PUBLISHED without a valid current version                                                                                            | §16.2, §23.5                          |
 
 ---
 
 ## 1. Purpose
 
-This document defines the physical PostgreSQL persistence contract for DB v1.3.1 of the Content Platform.
+This document defines the physical PostgreSQL persistence contract for DB v1.4.0 of the Content Platform.
 
 It translates the finalized DB v1 Logical Model Specification into explicit relational tables, columns, foreign keys, uniqueness rules, indexes, lifecycle constraints, deletion behavior, and migration requirements.
 
@@ -144,7 +161,7 @@ The database contract must not redefine the logical domain model. Supporting pla
 
 1. Domain and architecture contracts
 2. `DB v1 Logical Model Specification v1.0`
-3. This `DATABASE_SCHEMA_CONTRACT.md` (v1.3.1)
+3. This `DATABASE_SCHEMA_CONTRACT.md` (v1.4.0)
 4. Drizzle schema implementation
 5. Generated PostgreSQL migrations
 
@@ -2915,11 +2932,13 @@ DiscoveryObservation
   ↓
 DiscoveredResource
   ↓
-RawResource
+RawResource (acquisition-backed path only; on the inline path there is no RawResource — §5.9, §5.10)
   ↓
 SourceItem
   ↓
 ContentItem
+  ↓
+ContentVersion
 ```
 
 A SourceItem may map to a ContentItem only after normalization.
@@ -2929,6 +2948,104 @@ A ContentItem is identified by its canonical URL at the canonical content layer.
 Alternate URLs are stored separately in `content_urls`.
 
 Fingerprints are independent of URL identity and are used for duplicate detection.
+
+### 16.1 v1.4 canonical chain requirements (normative)
+
+The following v1.4.0 requirements supplement the v1.0 data-model descriptions above. They are NEW normative obligations; they are not implied by the v1.0 definitions, and they do not assert that a v1.4 implementation already exists.
+
+**SourceItem.** A `SourceItem` remains a source-specific record. It does NOT become a `ContentItem`. It retains its source-specific identity and provenance (§5.10).
+
+**Mapping bridge.** The mapping bridge between source-specific and canonical content is `source_items.content_item_id`. It associates a source-specific `SourceItem` with its canonical `ContentItem`; it is NULL until normalization performs that mapping (§5.10).
+
+**ContentItem.** A `ContentItem` represents the platform's canonical content identity. It is independent of any single `SourceItem`, source endpoint, or discovery URL. The source relationship and provenance remain traceable through the source-specific records and associated pipeline records (§5.11).
+
+**ContentVersion.** A `ContentVersion` is an immutable normalized representation of a `ContentItem` at a particular processing revision (§5.13). It is not merely an editable representation of the current `ContentItem` state; it is a concrete, immutable version in the canonical content history.
+
+### 16.2 v1.4 grandfathering of existing ContentItems (normative)
+
+Eight existing `content_items` rows currently have `current_version_id = NULL`. Their known composition is seven historical forensic/evidence records and one WP-11 live-validation record from 2026-11-14, identified as `8faf3e6e`.
+
+These eight existing records are grandfathered for their CURRENT state under INVARIANT-25 (§23.5). The grandfathering clause states:
+
+1. The exemption covers the existing state only.
+2. It does not grant an exemption for any future publication.
+3. It does not grant an exemption for re-publication.
+4. Any future transition into `PUBLISHED` must satisfy INVARIANT-25.
+5. This rule applies to these eight records as well as to all other ContentItems.
+
+No retroactive `ContentVersion` records may be fabricated merely to make these historical records appear compliant. No UUIDs are asserted here for the seven historical evidence records, and the records themselves MUST NOT be deleted, rewritten, or otherwise altered. The actual database constraints and validation sequence belong to the v1.4 implementation packages (migration `0021`).
+
+### 16.3 v1.4 publication binding to an immutable ContentVersion (normative — implementation deferred)
+
+Effective from v1.4.0, a publication MUST bind to a concrete, immutable `ContentVersion`. A publication MUST NOT be defined merely as a reference to the mutable current state of a `ContentItem`. The purpose is to ensure that subsequent changes to the canonical content cannot retroactively alter the content that was previously published.
+
+This is a NEW v1.4 normative requirement applicable to the publication model (§5.23, §5.25). It is NOT currently implemented: the present schema establishes no version reference from `publications` or `publication_candidates` to `content_versions`, and the current publication flow does not capture immutable version identity.
+
+The technical implementation is delivered by a later v1.4 package, initially within the planned package-5 scope (migration `0021`, database constraints, fixtures). This amendment defines no column name, foreign-key name, or migration definition for that binding. If package-5 scope analysis establishes that the binding requires additional work beyond package 5, that implementation detail is OPEN for the later package; the normative requirement itself is not weakened.
+
+### 16.4 v1.4 SourceItem production — discovery and acquisition responsibility (normative)
+
+> **STATUS: DECIDED (owner, 2026-11-15).** Discovery and SourceItem production are IN the v1.4 implementation scope (§24, D-020). The previously OPEN origin question is resolved; no alternative origin models remain under consideration.
+
+The v1.4 canonical-content lifecycle has the following upstream prerequisites. The approved end-to-end lifecycle has two upstream variants, differing only in whether acquisition persists a `RawResource` (§5.9, §5.10):
+
+```text
+Acquisition-backed path:
+Source → SourceEndpoint → DiscoveryObservation → DiscoveredResource → RawResource → SourceItem → ContentItem → ContentVersion
+
+Inline path (no RawResource):
+Source → SourceEndpoint → DiscoveryObservation → DiscoveredResource → SourceItem → ContentItem → ContentVersion
+```
+
+The lifecycle responsibilities and boundaries of the existing upstream entities (§5.3–§5.10) are:
+
+- **Source** (§5.3): logical publisher, brand, or content origin; not a technical endpoint. Owns no endpoint state.
+- **SourceEndpoint** (§5.4): the concrete technical access point. Owns polymorphic endpoint state with optimistic concurrency (`state_version`), the capability set (`DISCOVERY`, `ACQUISITION`, `EXTRACTION`), and the scheduler index `(status, next_poll_at)`.
+- **DiscoveryObservation** (§5.7): immutable record of one detection of a DiscoveredResource through a SourceEndpoint; preserves multi-path discovery history. There is no `updated_at`.
+- **DiscoveredResource** (§5.6): canonical candidate identity, unique by normalized `canonical_url`; independent of the observation path that found it.
+- **RawResource** (§5.9): raw acquisition snapshot; one DiscoveredResource may have many snapshots; retained for diagnostics, retries, auditability, and re-extraction.
+- **SourceItem** (§5.10): structured extraction result before platform-level normalization; source-specific business identity `(source_id, source_item_id)`; `content_item_id` remains NULL until normalization performs the mapping (§16.1).
+- **ContentItem** (§5.11) and **ContentVersion** (§5.13): canonical content identity and immutable version history, per §16.1 and INVARIANT-23/24/25 (§23.5).
+
+**SourceItem production responsibility (normative).** v1.4 MUST implement an actual production mechanism that creates `SourceItem` records from the upstream discovery/acquisition process. Concretely:
+
+1. v1.4 MUST provide executable discovery that polls due active endpoints and persists `DiscoveryObservation` and `DiscoveredResource` records.
+2. v1.4 MUST provide executable acquisition that persists `RawResource` snapshots where an endpoint's content requires fetching.
+3. v1.4 MUST provide executable extraction that persists `SourceItem` records, supporting BOTH established paths: extraction from a raw acquisition artifact and inline extraction directly from a discovered resource (`raw_resource_id` is nullable exactly because inline extraction may not require acquisition, §5.10).
+4. SourceItem production MUST record provenance for the produced artifacts through `provenance_events` with the phase-to-target mapping: `DISCOVERY` → `DISCOVERED_RESOURCE` (discovery-created candidate), `ACQUISITION` → `RAW_RESOURCE` (acquisition-backed path only), and `EXTRACTION` → `SOURCE_ITEM` (every produced SourceItem) (§5.8). Every produced SourceItem MUST be provenance-complete under this mapping.
+5. SourceItem production MUST NOT create `ContentItem` or `ContentVersion` records. The mapping bridge `source_items.content_item_id` is owned by normalization (§16.1), and `content_versions` has the sole writer defined in INVARIANT-23 (§23.5).
+
+**Current implementation status (evidence, not conformance).** As of 2026-11-15, none of the upstream production flow is implemented: no repository, service, worker handler, API route, script, or test writes `source_items`, `discovery_observations`, `discovered_resources`, or `raw_resources`, and both deployed databases hold zero rows across the entire upstream chain. This section is therefore a v1.4 requirement, not a description of existing behavior.
+
+### 16.5 v1.4 SourceItem lifecycle rules (normative; unresolved design questions recorded)
+
+The rules in this section are v1.4.0 normative requirements. Where the existing model does not settle a question, the question is recorded here explicitly as an unresolved design question for the implementation packages; this contract does not decide it silently.
+
+**Upstream evidence required before SourceItem creation.** A `SourceItem` MUST NOT be created without persisted upstream evidence:
+
+1. A persisted `DiscoveredResource` row (§5.6) and at least one persisted `DiscoveryObservation` of it through a `SourceEndpoint` (§5.7).
+2. For the acquisition-backed path, a persisted `RawResource` snapshot referenced from the SourceItem through `raw_resource_id` (§5.9, §5.10).
+3. For the inline path — extraction directly from the discovered resource, which §5.10 supports through the nullable `raw_resource_id` — no `RawResource` exists by design. The current provenance model establishes no structural link between the SourceItem and its originating DiscoveredResource. Their association can rely only on indirect provenance correlation (such as endpoint, timing, or URL), which does not guarantee unambiguous identification. Whether this provenance-only association is sufficient, or a direct relationship is required, remains an unresolved design question (tracked as plan Q6). No schema change is assumed by this contract, and no decision is made here.
+
+**SourceItem origin and canonical relationship.** A `SourceItem` retains its source-specific identity `(source_id, source_item_id)` and provenance (§5.10, §16.1). Its only relationship to canonical content is `source_items.content_item_id`, which normalization sets; before normalization that column is NULL. A SourceItem never becomes a ContentItem.
+
+**Duplicate discovery and repeated processing — only what the existing model settles.** The existing model settles exactly the following:
+
+- Multiple observations of the same normalized URL reference ONE `DiscoveredResource` row (`canonical_url` UNIQUE, §5.6); each observation is preserved immutably (§5.7).
+- A `DiscoveredResource` MAY have multiple `RawResource` snapshots (§5.9); re-acquisition is not duplicate data.
+- The SourceItem business identity `(source_id, source_item_id)` is UNIQUE (§5.10): repeated processing of the same source item identity cannot silently create a second SourceItem row.
+
+The following are NOT settled by the existing model and remain unresolved design questions for the implementation packages: idempotency keys for the pipeline stages; insert-versus-upsert semantics and re-processing behavior when a SourceItem already exists; the deduplication algorithm that decides whether a SourceItem maps to an existing or a new ContentItem (`content_fingerprints` and `duplicate_matches`, §5.16–§5.17, are storage structures, not an algorithm); retry policies for discovery, acquisition, and extraction; and the transaction boundaries of each upstream stage. The version-plus-pointer atomicity of INVARIANT-24 is settled and is unaffected.
+
+**Provenance and traceability.** SourceItem production MUST retain: immutable `DiscoveryObservation` records preserving multi-path history (§5.7); `RawResource` snapshots for acquisition-backed items (§5.9); and `provenance_events` for the produced artifacts with the phase-to-target mapping `DISCOVERY` → `DISCOVERED_RESOURCE`, `ACQUISITION` → `RAW_RESOURCE` (acquisition-backed path only), and `EXTRACTION` → `SOURCE_ITEM` (§5.8). After normalization, the `source_items.content_item_id` mapping is retained. The §5.8 target-entity model supports `CONTENT_ITEM` and `CONTENT_VERSION` provenance targets for normalization outcomes; however, §5.8 defines the phase vocabulary as exactly `DISCOVERY`, `ACQUISITION`, and `EXTRACTION` and defines no `NORMALIZATION` phase. This amendment does not assign normalization provenance events to any of the three existing phases, and it does not change §5.8. The phase under which normalization provenance events are recorded is therefore an unresolved contract question requiring a separate owner decision; it is recorded here, not decided; tracked as plan Q11.
+
+**Normalization eligibility.** A SourceItem is eligible for normalization only when ALL of the following hold:
+
+1. Its schema-required fields are present (`source_id`, `source_item_id`, `source_url`, `title`, `content` are NOT NULL, §5.10).
+2. It satisfies the upstream-evidence and provenance rules above.
+3. It is not already mapped (`content_item_id IS NULL`).
+
+Whether an already-mapped SourceItem may be re-normalized — for example to produce a new ContentVersion when the source content changes — is an unresolved design question for the normalization package. Until it is decided, eligibility is limited to unmapped SourceItems.
 
 ---
 
@@ -4042,7 +4159,7 @@ These concerns may receive additional persistence structures in later architectu
 
 ## 23. Architectural Invariants
 
-The following invariants are normative for DB v1.3.1.
+The following invariants are normative for DB v1.4.0.
 
 ### 23.1 Core ingestion invariants
 
@@ -4117,6 +4234,18 @@ The following invariants are normative for DB v1.3.1.
 60. **Single-Session Advisory-Lock Requirement (INVARIANT-20).** The `0016 MIGRATE` phase MUST execute on a single dedicated PostgreSQL session for its entire duration, including the non-transactional `CREATE UNIQUE INDEX CONCURRENTLY` step and the post-build catalog validation. Connection-pooled implementations MUST pin a single physical connection for the phase. Transaction boundaries do not release the session-level advisory lock. The transaction/session state machine is defined in §20.2.9.
 61. **Post-Failure Recovery Contract (INVARIANT-21).** A failure of `0016` after Step 1 has committed data does NOT return the deployment to the `0015` + Bridge state. The deployment enters the partial-0016 state (§20.2.8), which is recoverable by re-running `0016`. Manual `UPDATE` or `DELETE` statements against protected tables as a recovery mechanism are a contract violation. `0018 CONTRACT` MUST NOT execute while the deployment is in the partial-0016 state.
 62. **Immutable Pre-Migration Preservation Baseline (INVARIANT-22).** The pre-migration preservation digest set MUST be computed and immutably persisted by the migration runner before the first `0016` data modification, using the reserved `PRESERVATION_BASELINE_CAPTURED` action. Once committed, the baseline rows MUST NOT be modified, deleted, or superseded. Recovery attempts MUST use the existing baseline as the sole comparison target and MUST NOT recompute a new baseline from the current state. If the baseline is missing or partial and any `0016` data modification has been committed, the recovery attempt MUST abort with a hard failure.
+
+### 23.5 v1.4 canonical content invariants
+
+The following invariants are NEW normative requirements introduced by contract v1.4.0. They supplement the descriptive v1.0 data-model definitions for `source_items`, `content_items`, and `content_versions` (§5.10, §5.11, §5.13). They are not implied by the v1.0 data model, and their presence here does not assert that any v1.4 implementation already exists.
+
+63. **Sole Version Writer (INVARIANT-23; v1.4 I-1).** The dedicated normalization worker/service is the SOLE application-level actor permitted to create `content_versions` records. No other worker, service, or application actor may independently create or modify canonical content version records (§5.13). ContentVersion records are immutable after creation; this invariant does not authorize their update or deletion.
+
+64. **Atomic Version Creation and Current-Version Update (INVARIANT-24; v1.4 I-2).** The dedicated normalization worker/service — the same actor identified in INVARIANT-23 — performs both operations: it creates a new `ContentVersion` and updates the corresponding `content_items.current_version_id` within ONE atomic database transaction (§5.11, §5.13). The same worker/service is the SOLE application-level actor permitted to modify `content_items.current_version_id`; no other worker, service, or application actor may independently perform either operation. The system MUST NOT leave a committed new version without the corresponding current-version pointer update, nor a pointer referring to an uncommitted or nonexistent version. The transaction boundary MUST cover both operations.
+
+65. **PUBLISHED Requires a Valid Current Version (INVARIANT-25; v1.4 I-3).** A `ContentItem` MUST NOT transition into `PUBLISHED` unless `current_version_id` is VALID. For this invariant, VALID means precisely: (1) `current_version_id` is NOT NULL; (2) it references an EXISTING `content_versions` record; and (3) that `content_versions` record belongs to the SAME `content_items` row. The two database enforcement responsibilities are distinct: non-NULL enforcement can be implemented with a CHECK constraint; same-item identity requires an appropriate composite referential constraint. A plain foreign key that verifies only the existence of a version ID does NOT, by itself, guarantee that the version belongs to the same ContentItem. A PostgreSQL CHECK constraint cannot query another table, so the cross-table same-item condition is NOT CHECK-constrainable and MUST NOT be described as such. The planned database implementation is migration `0021` in the v1.4 package sequence. The composite referential enforcement may require a composite unique key on `content_versions(content_item_id, id)`; that key is NOT introduced by this amendment and its exact design MUST be verified against the actual schema during the implementation package.
+
+66. **Independent Editorial Counter (INVARIANT-26; v1.4 I-4).** `publication_candidates.version` remains an independent editorial counter forever (§5.23). It is NOT a foreign key to `content_versions`. It MUST NOT be reinterpreted as a canonical content version number and MUST NOT be coupled to `content_versions.version_number` (§5.13).
 
 ---
 
@@ -4269,6 +4398,16 @@ DB v1.3.1 does not provide tenant-, account-, workspace-, or organization-level 
 
 **Status: DEFERRED — NON-BLOCKING**
 
+### D-020 — SourceItem production origin (v1.4)
+
+The 2026-11-15 read-only investigation (contract ↔ code ↔ data) found NO implemented discovery-side `source_items` writer: the table has no writer anywhere in the current codebase (no repository, service, worker handler, API route, script, or test performs an insert or upsert), and both deployed databases hold zero rows across the entire upstream chain (`source_endpoints`, `discovered_resources`, `raw_resources`, `source_items`). The upstream production flow is described in §5.3–§5.10, §16, and the higher-level specifications, but it is not implemented.
+
+**Owner decision (2026-11-15, binding):** discovery and SourceItem production are IN the v1.4 implementation scope. The v1.4 implementation must provide the upstream production flow required to create SourceItems; the normalization process must not depend on a SourceItem population mechanism that does not exist in the current codebase. The normative requirements are recorded in §16.4 and §16.5; the implementation package allocation is recorded in the v1.4 development plan (`docs/planning/v1-4-development-plan-2026-11-15.md`). No alternative origin models remain under consideration.
+
+The `RawResource` step applies to the acquisition-backed path; on the inline path the `SourceItem` is extracted directly from the `DiscoveredResource` and no `RawResource` exists (§5.9, §5.10, §16.4, §16.5).
+
+**Status: DECIDED — owner decision 2026-11-15 (normative requirements in §16.4 and §16.5)**
+
 ---
 
 ## 25. Implementation Boundary
@@ -4278,7 +4417,7 @@ The implementation sequence is:
 ```text
 DB v1 Logical Model Specification v1.0
                 ↓
-DATABASE_SCHEMA_CONTRACT.md v1.3.1
+DATABASE_SCHEMA_CONTRACT.md v1.4.0
                 ↓
 Drizzle schema (45 tables)
                 ↓
@@ -4355,13 +4494,15 @@ These obligations must be verifiable by static analysis or code review. Any code
 
 ## 26. Contract Status
 
-**FINAL — PRODUCTION-READY DB v1.3.1 BASELINE WITH META INTEGRATION**
+**FINAL — v1.4.0 AMENDMENT APPROVED BY THE OWNER 2026-11-15, superseding DB v1.3.1 as the documentation baseline.**
+
+The v1.4.0 amendment adds normative canonical-content requirements (§16.1–§16.5, §23.5, D-020) on top of the unchanged DB v1.3.1 persistence model. The normative requirements are preserved in full; the amendment was approved by the owner on 2026-11-15 and is FINAL.
 
 **Migration semantics: Zero-Downtime Schema Migration + Bounded Write Fence**
 
 This document is the normative physical persistence baseline for implementation. It is self-contained and does not require the reader to consult any prior version of `DATABASE_SCHEMA_CONTRACT.md`.
 
-The complete DB v1.3.1 persistence table count is **45 tables**, organized into seven categories:
+The complete DB v1.4.0 persistence table count is **45 tables** (unchanged from DB v1.3.1; this amendment adds no schema change), organized into seven categories:
 
 ```text
 15  core logical model
@@ -4384,11 +4525,13 @@ DiscoveryObservation
   ↓
 DiscoveredResource
   ↓
-RawResource
+RawResource (acquisition-backed path only; on the inline path there is no RawResource — §5.9, §5.10)
   ↓
 SourceItem
   ↓
 ContentItem
+  ↓
+ContentVersion
 ```
 
 with:
@@ -4495,4 +4638,4 @@ No production Drizzle schema or migration should diverge from this contract with
 
 **Implementation gate:** before changing the database structure, update the higher-level domain and logical contracts, then this document, and only then the Drizzle schema or migrations.
 
-**End of DATABASE_SCHEMA_CONTRACT.md v1.3.1**
+**End of DATABASE_SCHEMA_CONTRACT.md v1.4.0**

@@ -4,15 +4,16 @@ This document records the project state at a milestone boundary. It is
 intended to be read first when resuming work in a new session.
 
 **Snapshot date:** 2026-11-15
-**Branch:** `feat/v14-package1-contract-amendment` (docs-only v1.4/1 amendment; `main`
-itself is untouched at `727e6e4`)
-**HEAD:** `727e6e4` — `docs(handoff): close WP-11 package 3 and correct test baselines`
+**Branch:** `feat/v14-package1-contract-amendment` (docs-only v1.4/1 amendment; at the
+pre-finalization baseline, `main` was at `727e6e4`)
+**HEAD (pre-finalization baseline):** `727e6e4` — `docs(handoff): close WP-11 package 3 and correct test baselines` (branch HEAD after the finalization commit: `dffb412`; this corrective commit builds on it)
 **Relationship to `main`:** the snapshot base IS `main`: `727e6e4` == `origin/main`
 (RE-CONFIRMED 2026-11-15: `git rev-parse HEAD` == `git rev-parse origin/main` ==
 `727e6e450fa8c78cdf419a2b39ea9b4def29d56d`). This HANDOFF update is part of the
 owner-authorized v1.4/1 finalization commit on the feature branch above; the merge of
-that branch into main is owner-authorized, conditional on all gates passing. Until that
-commit is created, these changes are uncommitted working-tree modifications. At the
+that branch into main is owner-authorized, conditional on all gates passing. These
+changes were prepared as uncommitted working-tree modifications and are recorded by
+the finalization commit (`dffb412`, 2026-11-15). At the
 pre-finalization baseline, main (origin/main) was at `727e6e4`.
 **Merge log (all merge commits):** PR #1 hardening (`c7b8e4f`) →
 PR #3 WP-4 first half (`67d6130`) → PR #2 WP-1 (`31b423f`) → PR #4
@@ -32,9 +33,8 @@ administrative bypass.
 **Working tree:** at finalization, the working tree carried exactly the
 complete v1.4/1 documentation set (HANDOFF.md,
 docs/architecture/DATABASE_SCHEMA_CONTRACT.md,
-docs/planning/v1-4-development-plan-2026-11-15.md); it becomes clean
-once the owner-authorized finalization commit is created and merged
-(owner-authorized 2026-11-15, conditional on all gates passing).
+docs/planning/v1-4-development-plan-2026-11-15.md); it became clean
+with the finalization commit `dffb412` (2026-11-15).
 **Repository:** https://github.com/ARTeomo/content-platform
 
 ---
@@ -2762,6 +2762,20 @@ migration, or test changes. This update is carried by the
 owner-authorized finalization commit; the commit SHA is reported in
 the finalization report.
 
+A further revision on 2026-11-15 (corrective commit, owner-authorized)
+reconciled three wording defects found in owner review of the
+finalization: (a) the plan's status-discipline line was brought into
+agreement with the v1.4/1 CLOSED status row, (b) two stale `draft`
+references to the contract in the plan were updated to the FINAL
+v1.4.0 status (owner-approved 2026-11-15), and (c) this header's
+Git-state labeling was rewritten to historical-baseline form
+(pre-finalization baseline `727e6e4`; branch HEAD after the
+finalization commit `dffb412`). Writes were limited to `HANDOFF.md`
+and `docs/planning/v1-4-development-plan-2026-11-15.md`; the contract
+file is untouched by this correction. Q11 remains OPEN. CP-F-20
+remains OPEN. This corrective commit builds on the finalization commit
+`dffb412` without amending it.
+
 **Required-section verification (executed at completion of this
 note, 2026-11-15, on the final file):**
 
@@ -2778,7 +2792,7 @@ note, 2026-11-15, on the final file):**
   preceding this note.
 - Document integrity note — this section.
 
-**Document metrics:** 2795 lines, 204680 bytes (measured
+**Document metrics:** 2809 lines, 205613 bytes (measured
 2026-11-15, on the final file after Prettier formatting of this note).
 
 **Consistency binding.** The verified pre-finalization baseline of

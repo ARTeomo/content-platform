@@ -2,11 +2,11 @@
 
 **Status:** APPROVED 2026-11-15 (owner-approved together with the v1.4.0 contract amendment). The owner has authorized one commit, push, PR creation and merge for this finalization, conditional on all validation gates passing.
 **Base:** branch `feat/v14-package1-contract-amendment` at `727e6e4` (= `origin/main`).
-**Normative basis:** `DATABASE_SCHEMA_CONTRACT.md` v1.4.0 draft — §16.1–§16.5, §23.5 (INVARIANT-23..26), D-020 (DECIDED 2026-11-15). Where this plan and the contract disagree, the contract prevails.
+**Normative basis:** `DATABASE_SCHEMA_CONTRACT.md` v1.4.0 FINAL (owner-approved 2026-11-15) — §16.1–§16.5, §23.5 (INVARIANT-23..26), D-020 (DECIDED 2026-11-15). Where this plan and the contract disagree, the contract prevails.
 **Scope decision (owner, 2026-11-15, binding):** discovery and SourceItem production are IN the v1.4 implementation scope. v1.4 must provide the upstream production flow (`Source → SourceEndpoint → DiscoveryObservation → DiscoveredResource → RawResource → SourceItem`); the normalization process must not depend on a SourceItem population mechanism that does not exist in the current codebase.
 
 The `RawResource` step applies to the acquisition-backed path; on the inline path the `SourceItem` is extracted directly from the `DiscoveredResource` and no `RawResource` exists (§5.9, §5.10, §16.4, §16.5).
-**Status discipline:** no package in this plan is implemented or closed, and no package becomes closed merely because this plan was updated. A package is CLOSED only when its closure evidence (§4 and §5) exists and the owner has reviewed it.
+**Status discipline:** no package becomes CLOSED merely because this plan was updated. A package is CLOSED only when its closure evidence (§4 and §5) exists and the owner has reviewed it. Package v1.4/1 is CLOSED 2026-11-15 by owner approval as the v1.4 documentation baseline; every other package remains unimplemented and OPEN.
 
 ---
 
@@ -52,7 +52,7 @@ Every package below defines: scope, explicit non-scope, prerequisites, deliverab
 
 ### v1.4/1 — Contract amendment, CP-F-20 clarification, development plan
 
-- **Scope:** contract v1.4.0 draft (§16.1–§16.5, §23.5 INVARIANT-23..26, D-020 DECIDED, header/§26 draft status); HANDOFF CP-F-20 clarification; this plan.
+- **Scope:** contract v1.4.0 (§16.1–§16.5, §23.5 INVARIANT-23..26, D-020 DECIDED; header/§26 FINAL status per owner approval 2026-11-15); HANDOFF CP-F-20 clarification; this plan.
 - **Non-scope:** any code, schema, migration, or database operation; commit/push (owner-withheld).
 - **Prerequisites:** none (documentation only).
 - **Deliverables:** the three documents listed under Scope, reviewed and approved by the owner.
